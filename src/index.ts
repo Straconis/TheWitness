@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 
 import { markInterruptedSessions } from "./recording/recovery";
 import { config } from "./config";
-import { createDiscordClient, recordings } from "./discord/client";
+import { createDiscordClient, recordings, settingsStore } from "./discord/client";
 
 async function main(): Promise<void> {
   console.log("The Witness v0.1.0");
@@ -11,6 +11,8 @@ async function main(): Promise<void> {
   await mkdir(config.recordingPath, {
     recursive: true
   });
+
+  await settingsStore.load();
 
   const interrupted = await markInterruptedSessions(config.recordingPath);
   if (interrupted) console.warn(`[Recovery] Preserved ${interrupted} interrupted session(s).`);

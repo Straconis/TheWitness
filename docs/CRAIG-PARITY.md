@@ -21,8 +21,8 @@ additional notices when adapting other components or bundled dependencies.
 | Discord bot | apps/bot | Commands and voice joining | Typed interactions, command acknowledgement, live connection tests |
 | Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Packet reordering, reconnect behavior, end-to-end recording validation |
 | Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Reconnection and validated recovery/export of interrupted files |
-| Automation | bot/modules/autorecord.ts | In-memory toggles; auto-record starts the engine | Persistent settings and scheduling/channel rules |
-| Notes and recording management | bot/commands | None | Notes, list/info, access checks, deletion |
+| Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
+| Notes and recording management | bot/commands | Server-scoped listing and ZIP export commands | Notes, richer info, deletion and access-policy refinement |
 | Browser recording | recorder/webapp.ts | None | Browser client, authorization, WebSocket transport, FLAC and continuous modes |
 | Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Mixed audio, archives and durable job queue |
 | Download interface | apps/ferret | None | Private download links, format selection, export status and deletion |
@@ -58,7 +58,7 @@ by a future continuation-page implementation, not silently truncated.
 
 ## Current verification
 
-TypeScript build and fifteen automated checks pass on Linux. Tests cover Ogg
+TypeScript build and eighteen automated checks pass on Linux. Tests cover Ogg
 checksums/lacing, speaker separation, paired timestamps, concurrent starts,
 finalization, failure states, interrupted-session preservation, and real Opus
 encoding/correction/decoding through per-speaker exports. Craig's
@@ -72,4 +72,6 @@ Witness lifecycle metadata in `session.json`. The `.info` file contains basic
 Craig-format identifiers and all feature flags, but is not yet a complete
 replacement for Craig's download authorization/recording database. Raw packets
 are currently stored in arrival order; packet jitter reordering and automatic
-reconnection remain to be adapted. Settings still reset when the bot restarts.
+reconnection remain to be adapted. Settings now persist across restarts. Discord ZIP delivery uses an 8 MiB budget;
+large exports require the pending web download interface. Command delivery remains
+unverified against a live Discord server.

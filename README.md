@@ -54,7 +54,12 @@ deployment host. On a Debian host with administrator access, install it using
 `sudo apt install ffmpeg`; no executable is bundled in the release.
 Exports are streamed from disk and processed one track at a time. An interrupted
 or failed recording cannot be exported until its recovery has been validated.
-The download interface and Discord export delivery are still to be implemented.
+Use `/recordings` to list recent server sessions and `/export session:<UUID>
+format:<format>` to request a private ZIP attachment. Attachment delivery currently
+uses an 8 MiB budget; larger exports stay saved on the host until the web download
+interface is implemented. One export runs at a time. These Discord interactions
+still need a live bot test. Automation settings persist in `settings.json` inside
+the recording directory; disabling auto-join also disables auto-record.
 
 ## License
 

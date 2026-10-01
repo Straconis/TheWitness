@@ -1,36 +1,28 @@
 import Eris from "eris";
+import path from "node:path";
+import { SettingsStore } from "../storage/settings";
+import { getSession, listSessions } from "../storage/sessions";
+import { exportSession, ExportFormat } from "../exports/export";
+import { archiveExport } from "../exports/archive";
 
 import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
 
 export const recordings = new RecordingManager(config.recordingPath);
 
-interface GuildSettings {
-  autoJoin: boolean;
-  autoRecord: boolean;
-}
-
+export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
 const activeVoiceChannels = new Map<string, string>();
-const guildSettings = new Map<string, GuildSettings>();
-
-function getSettings(guildID: string): GuildSettings {
-  let settings = guildSettings.get(guildID);
-
-  if (!settings) {
-    settings = {
-      autoJoin: false,
-      autoRecord: false
-    };
-
-    guildSettings.set(guildID, settings);
-  }
-
-  return settings;
-}
+const getSettings = (guildID: string) => settingsStore.get(guildID);
+const exportJobs = new Set<string>();
 
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      { type: 1, name: "recordings", description: "List the latest recordings in this server." },
+      { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
+        { type: 3, name: "session", description: "Session ID from /recordings", required: true },
+        { type: 3, name: "format", description: "Audio format", choices: ["ogg","wav","flac","mp3"].map(value => ({ name: value.toUpperCase(), value })) }
+      ] },
       {
         type: 1,
         name: "record",
@@ -185,6 +177,7 @@ export function createDiscordClient(): Eris.Client {
       return;
     }
 
+    try {
     const commandName = interaction.data?.name;
     const guildID = interaction.guildID;
 
@@ -196,7 +189,9 @@ export function createDiscordClient(): Eris.Client {
           "### Recording\n" +
           "**`/record`** - Join your voice channel and begin recording.\n" +
           "**`/stop`** - Stop recording and leave voice.\n" +
-          "**`/status`** - Show current status.\n\n" +
+          "**`/status`** - Show current status.\n" +
+          "**`/recordings`** - List saved sessions.\n" +
+          "**`/export`** - Download completed speaker tracks.\n\n" +
           "### Automation\n" +
           "**`/autojoin enable|disable|status`** - Automatically join voice.\n" +
           "**`/autorecord enable|disable|status`** - Automatically begin recording.\n\n" +
@@ -227,6 +222,43 @@ export function createDiscordClient(): Eris.Client {
 
     const settings = getSettings(guildID);
 
+    if (commandName === "recordings") {
+      await interaction.defer(64);
+      try {
+        const sessions = (await listSessions(config.recordingPath, guildID)).slice(0, 10);
+        await interaction.editOriginalMessage({ content: sessions.length
+          ? "**Recent recordings**\n" + sessions.map(session => `\`${session.id}\` — ${session.state}, ${session.tracks.length} tracks\n${session.startedAt}`).join("\n")
+          : "No saved recordings in this server yet." });
+      } catch (error) {
+        console.error("[Recordings]", error);
+        await interaction.editOriginalMessage({ content: "Could not load recordings." });
+      }
+      return;
+    }
+    if (commandName === "export") {
+      await interaction.defer(64);
+      if (exportJobs.size) {
+        await interaction.editOriginalMessage({ content: "An export is already processing. Please try again when it finishes." });
+        return;
+      }
+      exportJobs.add(guildID);
+      try {
+        const options = interaction.data?.options ?? [];
+        const id = options.find((option: any) => option.name === "session")?.value;
+        const format = (options.find((option: any) => option.name === "format")?.value ?? "ogg") as ExportFormat;
+        await getSession(config.recordingPath, id, guildID);
+        const directory = await exportSession(config.recordingPath, id, { format });
+        const archive = await archiveExport(directory, 8 * 1024 * 1024);
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: `witness-${id}-${format}.zip` }] });
+      } catch (error) {
+        console.error("[Export]", error);
+        await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
+          ? "This export is too large to attach in Discord. It is saved on the host; large-file downloads are still being implemented."
+          : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues." });
+      } finally { exportJobs.delete(guildID); }
+      return;
+    }
+
     if (commandName === "status") {
       const voiceChannelID = client.voiceConnections.get(guildID)?.channelID;
       const session = recordings.sessions.get(guildID);
@@ -249,16 +281,16 @@ export function createDiscordClient(): Eris.Client {
       const mode = interaction.data?.options?.[0]?.value;
 
       if (mode === "enable") {
-        settings.autoJoin = true;
+        await settingsStore.update(guildID, { autoJoin: true });
 
         await interaction.createMessage({
           content: "**Auto Join enabled.**"
         });
       } else if (mode === "disable") {
-        settings.autoJoin = false;
+        await settingsStore.update(guildID, { autoJoin: false, autoRecord: false });
 
         await interaction.createMessage({
-          content: "**Auto Join disabled.**"
+          content: "**Auto Join and Auto Record disabled.**"
         });
       } else {
         await interaction.createMessage({
@@ -274,8 +306,7 @@ export function createDiscordClient(): Eris.Client {
       const mode = interaction.data?.options?.[0]?.value;
 
       if (mode === "enable") {
-        settings.autoRecord = true;
-        settings.autoJoin = true;
+        await settingsStore.update(guildID, { autoRecord: true, autoJoin: true });
 
         await interaction.createMessage({
           content:
@@ -283,7 +314,7 @@ export function createDiscordClient(): Eris.Client {
             "Auto Join was also enabled."
         });
       } else if (mode === "disable") {
-        settings.autoRecord = false;
+        await settingsStore.update(guildID, { autoRecord: false });
 
         await interaction.createMessage({
           content: "**Auto Record disabled.**"
@@ -350,6 +381,13 @@ export function createDiscordClient(): Eris.Client {
         console.error("[Recording] Failed to stop:", error);
         await interaction.editOriginalMessage({ content: "Recording stopped with a storage error. Check the bot logs before using the session files." });
       }
+    }
+    } catch (error) {
+      console.error("[Command]", error);
+      try {
+        if (interaction.acknowledged) await interaction.editOriginalMessage({ content: "The command failed. Check the bot logs and try again." });
+        else await interaction.createMessage({ content: "The command failed. Check the bot logs and try again.", flags: 64 });
+      } catch (responseError) { console.error("[Command] Could not send error response:", responseError); }
     }
   });
 
