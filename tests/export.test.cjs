@@ -25,7 +25,7 @@ test('Craig correction exports separate tracks that decode to PCM', async () => 
     const session = await RecordingSession.create(root,'guild','voice');
     const encoder = new OpusEncoder(48000,2);
     const pcm = Buffer.alloc(960*2*2);
-    for (let frame = 0; frame < 6; frame++) {
+    for (let frame = 0; frame < 20; frame++) {
       for (let i=0;i<960;i++) {
         const value = Math.round(Math.sin((frame*960+i)*2*Math.PI*440/48000)*8000);
         pcm.writeInt16LE(value,i*4); pcm.writeInt16LE(value,i*4+2);
@@ -46,9 +46,27 @@ test('Craig correction exports separate tracks that decode to PCM', async () => 
       assert.equal(pages[1].data.toString('ascii',0,8),'OpusTags');
       const decoder = new OpusEncoder(48000,2);
       const audio = pages.slice(2).filter(p=>p.data.length>0);
-      assert.ok(audio.length >= 6);
+      assert.ok(audio.length >= 20);
       assert.ok(audio.some(p=>decoder.decode(p.data).some(byte=>byte!==0)));
       assert.ok(audio.every((p,i)=>i===0 || p.time>=audio[i-1].time));
+    }
+    const ffmpeg = process.env.FFMPEG_PATH || (require('node:fs').existsSync(path.resolve(__dirname, '../bin/ffmpeg')) ? path.resolve(__dirname, '../bin/ffmpeg') : 'ffmpeg');
+    const { spawnSync } = require('node:child_process');
+    const available = spawnSync(ffmpeg, ['-version']);
+    if (available.status === 0) {
+      for (const format of ['wav','flac','mp3']) {
+        const directory = await exportSession(root,session.id,{format,ffmpegPath:ffmpeg});
+        const manifest = JSON.parse(await readFile(path.join(directory,'manifest.json')));
+        assert.equal(manifest.tracks.length,2);
+        for (const track of manifest.tracks) {
+          const decoded = spawnSync(ffmpeg,['-v','error','-i',path.join(directory,track.file),'-f','s16le','-'],{maxBuffer:1024*1024});
+          assert.equal(decoded.status,0,decoded.stderr?.toString());
+          assert.ok(decoded.stdout.length >= (20*960-3840-960)*2*2);
+          assert.ok(decoded.stdout.some(byte=>byte!==0));
+        }
+      }
+    } else {
+      console.log('FFmpeg conversion checks unavailable; Ogg correction remains tested.');
     }
     await assert.rejects(exportSession(root,'../../elsewhere'), /Invalid session/);
     await assert.rejects(exportSession(root,session.id,{correctorPath:'/missing/oggcorrect'}));

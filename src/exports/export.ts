@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { once } from "node:events";
 import { Readable } from "node:stream";
@@ -69,7 +69,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
       const file = `track-${track.track}.${format}`;
       if (format !== "ogg") {
-        await transcode(ogg, path.join(temporary, file), format, options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg");
+        await transcode(ogg, path.join(temporary, file), format, options.ffmpegPath ?? (process.env.FFMPEG_PATH?.trim() || (existsSync(path.resolve(__dirname, "../../bin/ffmpeg")) ? path.resolve(__dirname, "../../bin/ffmpeg") : "ffmpeg")));
         await rm(ogg);
       }
       manifest.push({ file, userID: track.id, username: track.username });

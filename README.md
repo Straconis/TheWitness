@@ -46,8 +46,12 @@ inside that session containing numbered speaker files and a manifest mapping
 filenames to participants. This does not require a Discord token.
 
 Replace `ogg` with `wav`, `flac`, or `mp3` to convert through FFmpeg. FFmpeg must
-be installed on the host or configured through `FFMPEG_PATH`; those conversions
-have not yet been verified here. Formats have no payment or tier checks.
+be installed on the host, placed in `bin/ffmpeg`, or configured through
+`FFMPEG_PATH`. Ogg, WAV, FLAC and MP3 exports have been verified locally with
+generated audio and decoding checks. Formats have no payment or tier checks.
+The local FFmpeg executable is excluded from Git and must be installed on each
+deployment host. On a Debian host with administrator access, install it using
+`sudo apt install ffmpeg`; no executable is bundled in the release.
 Exports are streamed from disk and processed one track at a time. An interrupted
 or failed recording cannot be exported until its recovery has been validated.
 The download interface and Discord export delivery are still to be implemented.

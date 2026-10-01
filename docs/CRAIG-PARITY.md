@@ -24,7 +24,7 @@ additional notices when adapting other components or bundled dependencies.
 | Automation | bot/modules/autorecord.ts | In-memory toggles; auto-record starts the engine | Persistent settings and scheduling/channel rules |
 | Notes and recording management | bot/commands | None | Notes, list/info, access checks, deletion |
 | Browser recording | recorder/webapp.ts | None | Browser client, authorization, WebSocket transport, FLAC and continuous modes |
-| Exports | apps/kitchen and cook helpers | Craig correction and per-speaker Ogg; optional FFmpeg conversion | Verify converted formats, mixed audio, archives and durable job queue |
+| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Mixed audio, archives and durable job queue |
 | Download interface | apps/ferret | None | Private download links, format selection, export status and deletion |
 | Dashboard | apps/dashboard | None | Recording/settings management and authorization |
 | Browser editing/streaming | apps/ennuizel-streamer | None | Editor delivery and recording streaming |
@@ -64,7 +64,8 @@ finalization, failure states, interrupted-session preservation, and real Opus
 encoding/correction/decoding through per-speaker exports. Craig's
 original `oggtracks` C helper recognizes both tracks in a generated Witness
 fixture. The live Discord connection, audio decoding, timestamp correction,
-FFmpeg conversions, browser interfaces and hosting deployment remain unverified.
+browser interfaces and hosting deployment remain unverified. WAV, FLAC and MP3
+conversion and decoding have also passed with a locally installed FFmpeg.
 
 Recordings are stored at `<RECORDING_PATH>/<session UUID>/audio.ogg.*`, with
 Witness lifecycle metadata in `session.json`. The `.info` file contains basic
