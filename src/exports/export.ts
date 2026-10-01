@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,7 +8,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3";
-export interface ExportOptions { format?: ExportFormat; correctorPath?: string; ffmpegPath?: string }
+export interface ExportOptions { format?: ExportFormat; mix?: boolean; correctorPath?: string; ffmpegPath?: string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string): Promise<void> {
@@ -36,12 +36,15 @@ async function correct(directory: string, track: number, target: string, executa
   }
 }
 
-async function transcode(input: string, output: string, format: ExportFormat, executable: string): Promise<void> {
-  const codec = { wav: "pcm_s16le", flac: "flac", mp3: "libmp3lame", ogg: "libopus" }[format];
-  const child = spawn(executable, ["-nostdin", "-v", "error", "-n", "-i", input, "-c:a", codec, output], { stdio: ["ignore", "ignore", "pipe"] });
+const codecs = { wav: "pcm_s16le", flac: "flac", mp3: "libmp3lame", ogg: "libopus" };
+function ffmpegPath(options: ExportOptions): string {
+  return options.ffmpegPath ?? (process.env.FFMPEG_PATH?.trim() || (existsSync(path.resolve(__dirname,"../../bin/ffmpeg")) ? path.resolve(__dirname,"../../bin/ffmpeg") : "ffmpeg"));
+}
+async function convert(args: string[], executable: string): Promise<void> {
+  const child = spawn(executable,["-nostdin","-v","error","-n",...args],{stdio:["ignore","ignore","pipe"]});
   let stderr = "";
-  child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-8192); });
-  const [code] = await once(child, "close");
+  child.stderr.on("data",chunk => { stderr = (stderr+chunk).slice(-8192); });
+  const [code] = await once(child,"close");
   if (code !== 0) throw new Error(`Audio conversion failed (${code}): ${stderr}`);
 }
 
@@ -69,13 +72,26 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
       const file = `track-${track.track}.${format}`;
       if (format !== "ogg") {
-        await transcode(ogg, path.join(temporary, file), format, options.ffmpegPath ?? (process.env.FFMPEG_PATH?.trim() || (existsSync(path.resolve(__dirname, "../../bin/ffmpeg")) ? path.resolve(__dirname, "../../bin/ffmpeg") : "ffmpeg")));
-        await rm(ogg);
+        await convert(["-i",ogg,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
       }
       manifest.push({ file, userID: track.id, username: track.username });
     }
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, format, tracks: manifest }, null, 2));
+    let mix: string | undefined;
+    if (options.mix) {
+      mix = `mix.${format}`;
+      const inputs = metadata.tracks.flatMap((track: any) => ["-i",path.join(temporary,`track-${track.track}.ogg`)]);
+      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],path.join(temporary,mix)],ffmpegPath(options));
+    }
+    if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
+    let notes: string | undefined;
+    try {
+      const lines = (await readFile(path.join(directory,"notes.jsonl"),"utf8")).trim();
+      if (lines) {
+        notes = "notes.json";
+        await writeFile(path.join(temporary,notes),JSON.stringify(lines.split("\n").map(line => JSON.parse(line)),null,2));
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, format, tracks: manifest, mix, notes }, null, 2));
     await rename(temporary, target);
     return target;
   } catch (error) {

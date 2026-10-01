@@ -22,9 +22,9 @@ additional notices when adapting other components or bundled dependencies.
 | Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Packet reordering, reconnect behavior, end-to-end recording validation |
 | Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Reconnection and validated recovery/export of interrupted files |
 | Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
-| Notes and recording management | bot/commands | Server-scoped listing and ZIP export commands | Notes, richer info, deletion and access-policy refinement |
+| Notes and recording management | bot/commands | Server-scoped listing, notes and exports | Richer info, deletion and access-policy refinement |
 | Browser recording | recorder/webapp.ts | None | Browser client, authorization, WebSocket transport, FLAC and continuous modes |
-| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Mixed audio, archives and durable job queue |
+| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue and further export format parity |
 | Download interface | apps/ferret | Signed export pages and streamed speaker tracks | Format selection before export, job status, deletion and host routing |
 | Dashboard | apps/dashboard | None | Recording/settings management and authorization |
 | Browser editing/streaming | apps/ennuizel-streamer | None | Editor delivery and recording streaming |
@@ -58,7 +58,7 @@ by a future continuation-page implementation, not silently truncated.
 
 ## Current verification
 
-TypeScript build and nineteen automated checks pass on Linux. Tests cover Ogg
+TypeScript build and twenty automated checks pass on Linux. Tests cover Ogg
 checksums/lacing, speaker separation, paired timestamps, concurrent starts,
 finalization, failure states, interrupted-session preservation, and real Opus
 encoding/correction/decoding through per-speaker exports. Craig's
@@ -77,3 +77,11 @@ are currently stored in arrival order; packet jitter reordering and automatic
 reconnection remain to be adapted. Settings now persist across restarts. Discord ZIP delivery uses an 8 MiB budget;
 large exports can use the optional signed-link download service. Command delivery remains
 unverified against a live Discord server.
+
+Notes now preserve Craig's `STREAMNOTE` / `NOTE` convention on track 65536 and
+export as JSON. Optional mixed exports combine corrected Opus originals through
+FFmpeg before encoding the requested format. Local tests identify two distinct
+speaker tones in the mixed waveform and verify notes/mix delivery through ZIP
+and signed download paths. Packet jitter reordering remains unfinished; Craig's
+recorder buffers and sorts received packets before storage, while Witness still
+stores packets in arrival order.

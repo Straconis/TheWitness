@@ -24,22 +24,31 @@ test('Craig correction exports separate tracks that decode to PCM', async () => 
   try {
     const session = await RecordingSession.create(root,'guild','voice');
     const encoder = new OpusEncoder(48000,2);
+    const bobEncoder = new OpusEncoder(48000,2);
+    const bobPcm = Buffer.alloc(960*2*2);
     const pcm = Buffer.alloc(960*2*2);
     for (let frame = 0; frame < 20; frame++) {
       for (let i=0;i<960;i++) {
         const value = Math.round(Math.sin((frame*960+i)*2*Math.PI*440/48000)*8000);
         pcm.writeInt16LE(value,i*4); pcm.writeInt16LE(value,i*4+2);
+        const bobValue = Math.round(Math.sin((frame*960+i)*2*Math.PI*880/48000)*8000);
+        bobPcm.writeInt16LE(bobValue,i*4); bobPcm.writeInt16LE(bobValue,i*4+2);
       }
       const opus = encoder.encode(pcm);
       await session.append(opus,'alice','Alice',frame*960);
-      await session.append(opus,'bob','Bob',frame*960);
+      await session.append(bobEncoder.encode(bobPcm),'bob','Bob',frame*960);
       await new Promise(resolve=>setTimeout(resolve,20));
     }
     await assert.rejects(exportSession(root,session.id), /completed/);
+    await session.note("The dragon appears", "alice");
     await session.close();
     const output = await exportSession(root,session.id);
     const manifest = JSON.parse(await readFile(path.join(output,'manifest.json')));
     assert.deepEqual(manifest.tracks.map(t=>t.userID),['alice','bob']);
+    assert.equal(manifest.notes,'notes.json');
+    const notes = JSON.parse(await readFile(path.join(output,manifest.notes)));
+    assert.equal(notes[0].text,'The dragon appears');
+    assert.ok(notes[0].seconds>=0);
     for (const track of manifest.tracks) {
       const pages = packets(await readFile(path.join(output,track.file)));
       assert.equal(pages[0].data.toString('ascii',0,8),'OpusHead');
@@ -54,6 +63,22 @@ test('Craig correction exports separate tracks that decode to PCM', async () => 
     const { spawnSync } = require('node:child_process');
     const available = spawnSync(ffmpeg, ['-version']);
     if (available.status === 0) {
+      const mixed = await exportSession(root,session.id,{format:'wav',mix:true,ffmpegPath:ffmpeg});
+      const mixManifest = JSON.parse(await readFile(path.join(mixed,'manifest.json')));
+      assert.equal(mixManifest.mix,'mix.wav');
+      const audio = spawnSync(ffmpeg,['-v','error','-i',path.join(mixed,mixManifest.mix),'-ar','48000','-ac','1','-f','s16le','-'],{maxBuffer:1024*1024});
+      assert.equal(audio.status,0,audio.stderr?.toString());
+      function amplitude(frequency) {
+        let real=0,imaginary=0;
+        const samples=Math.floor(audio.stdout.length/2);
+        for(let i=0;i<samples;i++) {
+          const value=audio.stdout.readInt16LE(i*2), phase=2*Math.PI*frequency*i/48000;
+          real+=value*Math.cos(phase); imaginary+=value*Math.sin(phase);
+        }
+        return Math.hypot(real,imaginary)/samples;
+      }
+      assert.ok(amplitude(440)>500,'Alice tone is present in mixed audio');
+      assert.ok(amplitude(880)>500,'Bob tone is present in mixed audio');
       for (const format of ['wav','flac','mp3']) {
         const directory = await exportSession(root,session.id,{format,ffmpegPath:ffmpeg});
         const manifest = JSON.parse(await readFile(path.join(directory,'manifest.json')));

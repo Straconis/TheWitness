@@ -13,13 +13,20 @@ test('private downloads authenticate, stream ranges and preserve signing keys ac
  try {
   const directory=path.join(root,id,exportName); await mkdir(directory,{recursive:true});
   await writeFile(path.join(directory,'track-1.ogg'),'0123456789');
-  await writeFile(path.join(directory,'manifest.json'),JSON.stringify({format:'ogg',tracks:[{file:'track-1.ogg',username:'<script>bad</script>'}]}));
+  await writeFile(path.join(directory,'mix.wav'),'mixed audio');
+  await writeFile(path.join(directory,'notes.json'),'[]');
+  await writeFile(path.join(directory,'manifest.json'),JSON.stringify({format:'ogg',mix:'mix.wav',notes:'notes.json',tracks:[{file:'track-1.ogg',username:'<script>bad</script>'}]}));
   service = await DownloadService.create(root,'https://example.com');
   const port = await service.listen(0,'127.0.0.1');
   const local = url => url.replace('https://example.com',`http://127.0.0.1:${port}`);
   const link=local(service.link(id,exportName));
   const page=await fetch(link); assert.equal(page.status,200);
   const html=await page.text(); assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<script>'));
+  assert.ok(html.includes('Mixed session audio'));
+  const mixURL=new URL(link); mixURL.pathname+='/mix.wav';
+  assert.equal(await (await fetch(mixURL)).text(),'mixed audio');
+  const notesURL=new URL(link); notesURL.pathname+='/notes.json';
+  assert.equal(await (await fetch(notesURL)).text(),'[]');
   assert.equal(page.headers.get('referrer-policy'),'no-referrer');
   const url=new URL(link); url.pathname+='/track-1.ogg';
   const audio=await fetch(url); assert.equal(await audio.text(),'0123456789');

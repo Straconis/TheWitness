@@ -91,3 +91,16 @@ The signing key is generated in `<RECORDING_PATH>/download-key`. Keep the
 recording directory persistent across host restarts; removing or replacing this
 key invalidates old links. Host port routing and public HTTPS have not been
 verified on bot-hosting.net yet.
+
+## Session notes and mixed audio
+
+Use `/note text:<your note>` while recording to save a timestamped session note.
+Notes are written using Craig's note track convention and as a sidecar file.
+Exports include `notes.json` when notes are present.
+
+Choose `mix:true` with `/export` to include mixed session audio alongside separate
+speaker tracks. From the command line use
+`npm run export -- <session UUID> wav --mix` (other supported formats work too).
+Mixing requires FFmpeg and uses the corrected Opus originals before conversion,
+with normalized levels and the longest speaker track determining mix length.
+ZIP attachments and private download pages include the mix and notes.

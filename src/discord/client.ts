@@ -19,10 +19,12 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      { type: 1, name: "note", description: "Add a timestamped note to the current recording.", options: [{ type: 3, name: "text", description: "Your session note", required: true, max_length: 2000 }] },
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
-        { type: 3, name: "format", description: "Audio format", choices: ["ogg","wav","flac","mp3"].map(value => ({ name: value.toUpperCase(), value })) }
+        { type: 3, name: "format", description: "Audio format", choices: ["ogg","wav","flac","mp3"].map(value => ({ name: value.toUpperCase(), value })) },
+        { type: 5, name: "mix", description: "Also include mixed session audio" }
       ] },
       {
         type: 1,
@@ -191,6 +193,7 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
           "**`/record`** - Join your voice channel and begin recording.\n" +
           "**`/stop`** - Stop recording and leave voice.\n" +
           "**`/status`** - Show current status.\n" +
+          "**`/note`** - Add a timestamped session note.\n" +
           "**`/recordings`** - List saved sessions.\n" +
           "**`/export`** - Download completed speaker tracks.\n\n" +
           "### Automation\n" +
@@ -223,6 +226,18 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
 
     const settings = getSettings(guildID);
 
+    if (commandName === "note") {
+      await interaction.defer(64);
+      const text = interaction.data?.options?.find((option: any) => option.name === "text")?.value;
+      const result = await recordings.exclusive(guildID, async () => {
+        const session = recordings.sessions.get(guildID);
+        if (!session) return false;
+        await session.note(text, interaction.member?.id ?? "unknown");
+        return true;
+      });
+      await interaction.editOriginalMessage({ content: result ? "Note saved at the current recording timestamp." : "Start a recording before adding a note." });
+      return;
+    }
     if (commandName === "recordings") {
       await interaction.defer(64);
       try {
@@ -248,7 +263,8 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
         const id = options.find((option: any) => option.name === "session")?.value;
         const format = (options.find((option: any) => option.name === "format")?.value ?? "ogg") as ExportFormat;
         await getSession(config.recordingPath, id, guildID);
-        const directory = await exportSession(config.recordingPath, id, { format });
+        const mix = options.find((option: any) => option.name === "mix")?.value === true;
+        const directory = await exportSession(config.recordingPath, id, { format, mix });
         if (downloads) {
           const link = downloads.link(id, path.basename(directory));
           await interaction.editOriginalMessage({ content: `Your speaker tracks are ready.\n[Open private downloads](${link})\nThis link expires in 24 hours. Share it only with your group.` });

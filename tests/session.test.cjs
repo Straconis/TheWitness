@@ -104,3 +104,19 @@ test('startup marks interrupted recordings and preserves completed sessions and 
     assert.equal(Object.keys(info.features).length, 8);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('notes preserve timestamps and Craig note track and drain on close', async () => {
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-notes-'));
+ try {
+  const session=await RecordingSession.create(root,'guild','voice');
+  await assert.rejects(session.note('   ','alice'),/Notes/);
+  const pending=[session.note('First note','alice'),session.note('Second note','bob')];
+  await session.close(); await Promise.all(pending);
+  const notes=(await readFile(path.join(session.directory,'notes.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(notes.map(n=>n.text),['First note','Second note']);
+  assert.ok(notes[1].seconds>=notes[0].seconds);
+  const data=pages(await readFile(path.join(session.directory,'audio.ogg.data')));
+  assert.deepEqual(data.map(p=>[p.track,p.sequence,p.data.toString()]),[[65536,1,'NOTEFirst note'],[65536,2,'NOTESecond note']]);
+  await assert.rejects(session.note('Late note','alice'),/closed/);
+ } finally { await rm(root,{recursive:true,force:true}); }
+});

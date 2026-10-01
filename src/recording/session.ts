@@ -18,6 +18,8 @@ export class RecordingSession {
   readonly directory: string;
   state: "recording" | "completed" | "failed" = "recording";
   packets = 0;
+  notes = 0;
+  private notePacket = 0;
   private start = process.hrtime.bigint();
   private files = new Map<string, FileHandle>();
   private queue: Promise<void> = Promise.resolve();
@@ -34,8 +36,8 @@ export class RecordingSession {
     const session = new RecordingSession(root, guildID, channelID);
     await mkdir(session.directory, { recursive: true });
     try {
-      for (const name of ["header1", "header2", "data", "users"]) {
-        session.files.set(name, await open(path.join(session.directory, `audio.ogg.${name}`), "wx"));
+      for (const name of ["header1", "header2", "data", "users", "notes"]) {
+        session.files.set(name, await open(path.join(session.directory, name === "notes" ? "notes.jsonl" : `audio.ogg.${name}`), "wx"));
       }
       await session.write("users", Buffer.from('"0":{}\n'));
       await writeFile(path.join(session.directory, "audio.ogg.info"), JSON.stringify({
@@ -66,7 +68,7 @@ export class RecordingSession {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, guildID: this.guildID, channelID: this.channelID,
-      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets,
+      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes,
       error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
@@ -99,6 +101,21 @@ export class RecordingSession {
     });
     this.queue = task.catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); })
       .finally(() => { this.pendingBytes -= packet.length; });
+    return task;
+  }
+
+  note(text: string, authorID: string): Promise<void> {
+    if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
+    if (!text.trim() || text.length > 2000) return Promise.reject(new Error("Notes must contain between 1 and 2000 characters."));
+    const time = (process.hrtime.bigint() - this.start) * 48000n / 1000000000n;
+    const task = this.queue.then(async () => {
+      if (this.failure) throw this.failure;
+      if (this.notePacket === 0) await this.write("header1", encodeOggPage(0,65536,this.notePacket++,Buffer.from("STREAMNOTE"),BOS));
+      await this.write("data",encodeOggPage(time,65536,this.notePacket++,Buffer.from("NOTE"+text)));
+      await this.write("notes",Buffer.from(JSON.stringify({ seconds: Number(time)/48000, text, authorID })+"\n"));
+      this.notes++;
+    });
+    this.queue = task.catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); });
     return task;
   }
 

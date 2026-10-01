@@ -7,7 +7,7 @@ import path from "node:path";
 import { sessionIDPattern } from "../storage/sessions";
 
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
-const filePattern = /^(manifest\.json|track-\d+\.(ogg|wav|flac|mp3))$/;
+const filePattern = /^(manifest\.json|notes\.json|mix\.(ogg|wav|flac|mp3)|track-\d+\.(ogg|wav|flac|mp3))$/;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
 
 export class DownloadService {
@@ -58,13 +58,16 @@ export class DownloadService {
     if ((await stat(manifestPath)).size > 1024*1024) throw new Error("Invalid export manifest.");
     const manifest = JSON.parse(await readFile(manifestPath,"utf8"));
     if (!Array.isArray(manifest.tracks) || !manifest.tracks.every((track: any) => typeof track.file === "string" && filePattern.test(track.file) && typeof track.username === "string")) throw new Error("Invalid export manifest.");
+    if (manifest.mix && !/^mix\.(ogg|wav|flac|mp3)$/.test(manifest.mix)) throw new Error("Invalid mixed file.");
+    if (manifest.notes && manifest.notes !== "notes.json") throw new Error("Invalid notes file.");
     const filename = parts[4];
     if (!filename) {
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${escapeHTML(url.search)}">${escapeHTML(track.username)}</a></li>`).join("");
-      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>The Witness</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p><ul>${links}</ul><p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
+      const extras = [[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"]].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${escapeHTML(url.search)}">${label}</a></li>`).join("");
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>The Witness</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p><ul>${extras}${links}</ul><p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
       response.writeHead(200,{ "Content-Type":"text/html; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : html); return;
     }
-    if (!filePattern.test(filename) || (filename !== "manifest.json" && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");
+    if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");
     const file = await open(path.join(directory,filename),constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const info = await file.stat();
