@@ -55,3 +55,15 @@ deployment host. On a Debian host with administrator access, install it using
 Exports are streamed from disk and processed one track at a time. An interrupted
 or failed recording cannot be exported until its recovery has been validated.
 The download interface and Discord export delivery are still to be implemented.
+
+## License
+
+The Witness project code is licensed under [ISC](LICENSE). Craig's copyright
+and permission notices are retained in the root license and
+[licenses/Craig-ISC.txt](licenses/Craig-ISC.txt).
+
+Dependencies and external executables retain their own licenses. The local
+FFmpeg test binary is GPL-3.0-or-later and is not tracked in this repository.
+Any deployment package that includes FFmpeg must preserve its notices and
+provide the corresponding source and build information as its license requires.
+The Witness's ISC license does not replace those third-party terms.
