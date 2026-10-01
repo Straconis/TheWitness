@@ -1,3 +1,4 @@
+import { RetentionRunner } from "./automation/retention";
 import { ExportQueue } from "./exports/jobs";
 import { DownloadService } from "./downloads/service";
 import { mkdir } from "node:fs/promises";
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
   await storageMonitor.start().catch(error=>console.warn("[Storage] Disk-space check unavailable.",error));
   const exportQueue = new ExportQueue(config.recordingPath);
   await exportQueue.load();
+  const retention=new RetentionRunner(config.recordingPath,settingsStore,recordings,exportQueue);retention.start();
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
   if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!); }
@@ -34,7 +36,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     storageMonitor.close();
-    try { await recordings.shutdown(); await closeRecordingPanels(); await exportQueue.close(); }
+    try { await retention.close(); await closeRecordingPanels(); await recordings.shutdown(); await exportQueue.close(); }
     catch (error) { console.error("[Shutdown]", error); process.exitCode = 1; }
     finally { client.disconnect({ reconnect: false }); await downloads?.close(); }
   };

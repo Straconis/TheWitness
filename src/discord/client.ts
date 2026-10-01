@@ -1,3 +1,4 @@
+import { ScheduleRunner,newSchedule } from "../automation/schedules";
 import Eris from "eris";
 import { EventRecording } from "./event-recording";
 import { mayUseBot } from "./access";
@@ -25,12 +26,16 @@ export const settingsStore = new SettingsStore(path.join(config.recordingPath, "
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
 let recordingPanels:RecordingPanels|undefined;
-export async function closeRecordingPanels():Promise<void>{await recordingPanels?.close();}
+let scheduleRunner:ScheduleRunner|undefined;
+export async function closeRecordingPanels():Promise<void>{await scheduleRunner?.close();await recordingPanels?.close();}
 const exportJobs = new Set<string>();
 
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"schedule",description:"Opt into recurring recording (Manage Server required).",options:[{type:3,name:"action",description:"Schedule action",required:true,choices:[{name:"Add",value:"add"},{name:"Remove",value:"remove"},{name:"List",value:"list"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]},{type:3,name:"time",description:"Start HH:MM in the selected time zone"},{type:3,name:"days",description:"Weekdays as numbers: 0=Sun, 1=Mon, … 6=Sat (comma-separated)"},{type:3,name:"timezone",description:"IANA time zone, e.g. America/New_York (default UTC)"},{type:4,name:"minutes",description:"Recording duration in minutes",min_value:1,max_value:1440},{type:3,name:"title",description:"Recording title",max_length:120},{type:3,name:"id",description:"Schedule ID to remove"}]},
+      {type:1,name:"retention",description:"Opt into deleting old completed recordings (Manage Server required).",options:[{type:4,name:"days",description:"Keep completed recordings this many days; 0 disables cleanup",required:true,min_value:0,max_value:3650},{type:5,name:"confirm",description:"Confirm automatic permanent deletion"}]},
+      {type:1,name:"channelrules",description:"Limit automatic joining to selected channels (Manage Server required).",options:[{type:3,name:"mode",description:"Channel policy",required:true,choices:[{name:"Any channel",value:"all"},{name:"Add channel",value:"add"},{name:"Remove channel",value:"remove"},{name:"Show channels",value:"status"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]}]},
       {type:1,name:"exportjob",description:"Inspect, cancel or retry an export job.",options:[{type:3,name:"action",description:"Job action",required:true,choices:[{name:"Status",value:"status"},{name:"Cancel",value:"cancel"},{name:"Retry",value:"retry"}]},{type:3,name:"job",description:"Export job ID",required:true}]},
       {type:1,name:"eventrecord",description:"Opt into recording a selected Discord voice event.",options:[{type:3,name:"mode",description:"Event recording rule",required:true,choices:[{name:"Enable",value:"enable"},{name:"Disable",value:"disable"},{name:"Show rules",value:"status"}]},{type:3,name:"event",description:"Discord event ID or event link"},{type:5,name:"stop_on_end",description:"Also stop this event's recording when the event ends (default off)"}]},
       {type:1,name:"access",description:"Manage who may use The Witness (Manage Server required).",options:[{type:3,name:"mode",description:"Access policy",required:true,choices:[{name:"Everyone",value:"everyone"},{name:"Bot Wrangler role",value:"role"},{name:"Show current policy",value:"status"}]},{type:8,name:"role",description:"Role allowed to control the bot (required for role mode)"}]},
@@ -44,7 +49,7 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
-        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","ogg","wav","flac","mp3"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase(), value })) },
+        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase(), value })) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
         { type: 3, name: "upload", description: "Upload to your configured cloud account", choices:["dropbox","google","onedrive","box"].map(value=>({name:value,value})) }
@@ -164,12 +169,18 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});
   client.on("guildScheduledEventUpdate",event=>{void events.update({id:event.id,guildID:event.guild.id,channelID:(event as unknown as {channel?:{id:string}}).channel?.id??null,entityType:event.entityType,status:event.status,name:event.name}).catch(error=>console.error("[Event recording]",error));});
 
+  const schedules=new ScheduleRunner(config.recordingPath,settingsStore,recordings,async(guildID,rule)=>{
+    const guild=client.guilds.get(guildID),channel=guild?.channels.get(rule.channelID);if(!guild||!channel||channel.type!==2)throw Error("Scheduled voice channel unavailable.");
+    const connection=await joinVoiceChannel(client,guild,rule.channelID),session=await recordings.start(guild,rule.channelID,connection,()=>client.joinVoiceChannel(rule.channelID,{opusOnly:true,selfDeaf:false}));
+    if(rule.title)await session.setTitle(rule.title);await panels.ensure(rule.channelID,session).catch(error=>console.warn("[Schedule panel]",error));return session.id;
+  },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});scheduleRunner=schedules;let schedulesStarted=false;
   client.on("ready", async () => {
     console.log(
       `[Discord] Logged in as ${client.user.username} (${client.user.id})`
     );
 
     try {
+      if(!schedulesStarted){await schedules.load();schedules.startTimer();schedulesStarted=true;}
       await registerCommands(client);
     } catch (error) {
       console.error("[Discord] Failed to register commands:", error);
@@ -184,7 +195,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const guild = channel.guild;
     const settings = getSettings(guild.id);
 
-    if (!settings.autoJoin || !mayUseBot(settings,member.roles)) {
+    if (!settings.autoJoin || (settings.autoJoinChannels!==undefined&&!settings.autoJoinChannels.includes(channel.id)) || !mayUseBot(settings,member.roles)) {
       return;
     }
 
@@ -253,7 +264,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           "**`/access`** - Choose everyone or a Bot Wrangler role (Manage Server required).\n\n" +
           "### Automation\n" +
           "**`/autojoin enable|disable|status`** - Automatically join voice.\n" +
-          "**`/autorecord enable|disable|status`** - Automatically begin recording.\n\n" +
+          "**`/autorecord enable|disable|status`** - Automatically begin recording.\n" +
+          "**`/eventrecord`** - Record selected voice events.\n" +
+          "**`/schedule`** - Configure weekly recording times.\n" +
+          "**`/channelrules`** - Limit automatic joining to selected channels.\n" +
+          "**`/retention`** - Optional cleanup; days:0 keeps it off.\n" +
+          "**`/exportjob`** - Check, cancel or retry exports.\n\n" +
           "**`/help`** - Show this message.\n\n" +
           "*The Witness remembers.*"
       });
@@ -281,6 +297,15 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
+    if(["schedule","retention","channelrules"].includes(commandName)){
+      if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required for automation settings.",flags:64});return;}
+      const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value;await interaction.defer(64);
+      if(commandName==="retention"){const days=value("days");if(days>0&&value("confirm")!==true)throw Error("Set confirm:true to enable permanent automatic deletion. Use days:0 to keep cleanup off.");await settingsStore.update(guildID,{retentionDays:days});await interaction.editOriginalMessage({content:days?`Automatic cleanup enabled: completed recordings and their exports older than ${days} days will be permanently deleted. Active, failed and interrupted recordings are preserved.`:"Automatic cleanup is off."});return;}
+      if(commandName==="channelrules"){const mode=value("mode");if(mode==="status"){await interaction.editOriginalMessage({content:settings.autoJoinChannels===undefined?"Automatic joining may use any voice channel when enabled.":settings.autoJoinChannels.length?"Allowed channels: "+settings.autoJoinChannels.map(id=>`<#${id}>`).join(", "):"No channels allowed for automatic joining."});return;}if(mode==="all")await settingsStore.update(guildID,{autoJoinChannels:undefined});else{const channel=value("channel");if(guild.channels.get(channel)?.type!==2)throw Error("Choose a voice channel.");const channels=settings.autoJoinChannels??[];await settingsStore.update(guildID,{autoJoinChannels:mode==="add"?[...new Set([...channels,channel])]:channels.filter(id=>id!==channel)});}await interaction.editOriginalMessage({content:"Channel policy saved. Autojoin and autorecord remain at their current settings."});return;}
+      const rules=settings.schedules??[],action=value("action");if(action==="list"){await interaction.editOriginalMessage({content:rules.length?rules.map(rule=>`${rule.id}: <#${rule.channelID}> at ${rule.time} ${rule.timezone}; days ${rule.days.join(",")}; ${rule.durationMinutes} minutes`).join("\n"):"No recurring recordings are enabled.",allowedMentions:{parse:[]}});return;}
+      if(action==="remove"){if(!rules.some(rule=>rule.id===value("id")))throw Error("Schedule not found.");await settingsStore.update(guildID,{schedules:rules.filter(rule=>rule.id!==value("id"))});await interaction.editOriginalMessage({content:"Schedule removed. Any recording it already started will finish at its scheduled end."});return;}
+      if(guild.channels.get(value("channel"))?.type!==2)throw Error("Choose a voice channel.");if(typeof value("days")!=="string"||!value("days").trim())throw Error("Choose weekdays using 0–6 separated by commas.");const rule=newSchedule({channelID:value("channel"),title:value("title")??"Scheduled recording",time:value("time")??"",timezone:value("timezone")??"UTC",days:String(value("days")??"").split(",").map(Number),durationMinutes:value("minutes")});await settingsStore.update(guildID,{schedules:[...rules,rule]});await interaction.editOriginalMessage({content:`Schedule enabled: ${rule.id}. Starts at ${rule.time} ${rule.timezone} and records for ${rule.durationMinutes} minutes.`});return;
+    }
     if(commandName==="exportjob"){
       if(!exportQueue)throw new Error("Export queue unavailable.");const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="job")?.value,action=options.find((option:any)=>option.name==="action")?.value;
       const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new Error("Export job not found in this server.");await interaction.defer(64);
@@ -328,7 +353,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to delete recordings.",flags:64});return;}
       await interaction.defer(64);
       if(exportQueue?.busy(id))throw new Error("Wait for this recording's export to finish before deleting it.");
-      await recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID));
+      if(exportQueue)await exportQueue.whileIdle(id,()=>recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID)));else await recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID));
       await interaction.editOriginalMessage({content:"Recording and exports permanently deleted."});return;
     }
     if (commandName === "webapp" || commandName === "dashboard") {

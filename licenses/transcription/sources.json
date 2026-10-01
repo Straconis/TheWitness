@@ -1,0 +1,17 @@
+{
+  "engine": {
+    "version": "v1.8.7",
+    "commit": "48f628a84833905ee4a0658ee6d4a5c915ce1997",
+    "repository": "https://github.com/ggml-org/whisper.cpp.git",
+    "archiveSHA256": "f5da499907f5fec8fbb11f0ff16f2cdcbba3b6636badf5788c0ed07f844cf670"
+  },
+  "model": {
+    "name": "ggml-base.en.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+    "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+  },
+  "buildTool": {
+    "url": "https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-x86_64.tar.gz",
+    "sha256": "d6c83076c575bc00b823522ac974bda66d0af05d6ddc30e739c12385cf32c6cc"
+  }
+}

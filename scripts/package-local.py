@@ -16,8 +16,9 @@ with tarfile.open(payload,'w:gz') as archive:
     for item in items:archive.add(root/item,arcname='TheWitness/'+item,filter=safe)
 sources=out/'the-witness-audio-sources.tar.gz'
 with tarfile.open(sources,'w:gz') as archive:
-    for item in ['scripts/build-portable-audio.sh','scripts/prepare-audio-sources.py','licenses/audio','cook']:
+    for item in ['scripts/build-portable-audio.sh','scripts/prepare-audio-sources.py','scripts/prepare-transcription.py','licenses/audio','licenses/transcription','cook']:
         archive.add(root/item,arcname='TheWitness/'+item)
     archive.add(root/'work/portable/sources',arcname='TheWitness/work/portable/sources')
+    archive.add(root/'work/transcription/whisper.cpp-v1.8.7.tar.gz',arcname='TheWitness/work/transcription/whisper.cpp-v1.8.7.tar.gz')
 (out/'SHA256SUMS').write_text(''.join(hashlib.sha256(file.read_bytes()).hexdigest()+'  '+file.name+'\n' for file in [payload,sources]))
 print('Created local testing payload and matching audio sources in '+str(out))

@@ -1,31 +1,11 @@
-# Improvements for the rebuild
+# Implemented rebuild improvements
 
-Implemented in the latest sweep:
+Readable UTC filenames, titles, shared notes and Audition markers, compact Discord
+feedback, optional Bot Wrangler access, storage warnings, export cancellation and
+retry, scheduled events, recurring schedules and channel rules are implemented.
+This sweep adds bundled transcription, cloud OAuth/refresh, AAC and Audacity
+packages, non-destructive browser editing and optional retention.
 
-- Recording date/time download names, with a saved server preference and a
-  per-download switch to original filenames.
-- Adobe Audition project ZIPs: named speaker tracks, relative media references,
-  correct clip lengths, ZIP64 disk streaming and large WAV support.
-- Reliable cancellation of reconnects during stop/shutdown.
-- One job for concurrent matching export requests.
-- Preserve and skip corrupt export-job metadata while other jobs resume.
-- Protect sample-zero audio timestamps from being misread as Ogg headers.
-
-Added in the following sweep: session titles, notes as Audition XMP markers,
-and disk-space monitoring/alerts. Audition marker display still needs testing.
-
-Further improvement ideas:
-
-1. Session titles and tags, such as campaign and episode, alongside date/time.
-   This would make dashboards and downloaded projects easier to find later.
-2. Export session notes as Audition timeline markers, so story beats and edit
-   points appear in the editor instead of only in the notes file.
-3. Disk-space status and early low-space alerts, with cleanup always explicit or
-   opt-in. Avoid surprise deletion of recordings.
-4. Visible per-speaker packet/drop diagnostics after recording, to distinguish
-   connection problems from microphone problems.
-5. Cancel/retry controls for export jobs, with original recordings preserved.
-
-Pending real-application checks: a Discord group recording, opening the generated
-SESX session in Audition, a real browser microphone, and hosting-image/public
-HTTPS compatibility. Passing local fixtures does not replace these checks.
+Further ideas are optional enhancements, not release prerequisites. A/V sync
+assistance is deliberately deferred until the OBS/VTT Cameraman workflow is ready.
+See READY-TO-TEST.md for required setup and live verification.

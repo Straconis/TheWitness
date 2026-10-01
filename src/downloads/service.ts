@@ -1,3 +1,8 @@
+import { transcriptionReady } from "../integrations/transcription-config";
+import { editorPage } from "./editor-page";
+import { waveform } from "./waveforms";
+import { validateEdits } from "../exports/edits";
+import { CloudAccounts } from "../integrations/accounts";
 import { downloadName, DownloadNaming } from "./names";
 import { renameSession } from "../storage/titles";
 import { StorageMonitor } from "../storage/space";
@@ -21,7 +26,7 @@ import path from "node:path";
 import { sessionIDPattern } from "../storage/sessions";
 
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
-const filePattern = /^(manifest\.json|notes\.json|session\.sesx|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3)|track-\d+\.(ogg|wav|flac|mp3))$/;
+const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup)|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|track-\d+\.(ogg|wav|flac|mp3|m4a))$/;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
 
 export class DownloadService {
@@ -50,13 +55,13 @@ export class DownloadService {
     const guildID=url.pathname.slice(11);
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),sessions:await listSessions(this.root,guildID)});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage());
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
     if(request.headers.origin && request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
     if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-    let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>8192)return this.json(response,413,{error:"Request too large."});}
+    let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1048576)return this.json(response,413,{error:"Request too large."});}
     const data=JSON.parse(body);
     try{
       if(data.action==="settings"){
@@ -65,7 +70,7 @@ export class DownloadService {
         await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {})});return this.json(response,200,{saved:true});
       }
       if(data.action==="title"){await this.manager.exclusive(guildID,async()=>{const active=this.manager!.sessions.get(guildID);if(active&&active.id===data.session)await active.setTitle(data.title);else await renameSession(this.root,data.session,guildID,data.title);});return this.json(response,200,{saved:true});}
-      if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true);return this.json(response,202,{url:this.jobLink(job.id)});}
+      if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true,{transcribe:data.transcribe===true,upload:data.upload||undefined});return this.json(response,202,{url:this.jobLink(job.id)});}
       if(data.action==="recover"){const id=await this.manager.exclusive(guildID,()=>recoverSession(this.root,data.session,guildID));return this.json(response,200,{id});}
       return this.json(response,400,{error:"Unknown action."});
     }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Request failed."});}
@@ -105,6 +110,11 @@ export class DownloadService {
     response.setHeader("X-Content-Type-Options","nosniff");
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
+    if(url.pathname==="/oauth/callback"){
+      if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
+      try{if(url.searchParams.has("error"))throw Error("Account connection was declined. Start again from the owner command line.");const provider=await new CloudAccounts(this.root).callback(url.searchParams.get("state")??"",url.searchParams.get("code")??"",this.publicURL);return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><h1>${provider} connected</h1><p>You can close this window. Uploads remain opt-in.</p></html>`);}
+      catch(error){return this.error(response,400,error instanceof Error?error.message:"Account connection failed.");}
+    }
     if(/^\/(browser|job|dashboard)\/[a-zA-Z0-9_-]{1,64}$/.test(url.pathname)){
       if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");
       if(url.pathname.startsWith("/dashboard/"))return this.dashboard(request,response,url);
@@ -139,19 +149,31 @@ export class DownloadService {
     const manifest = JSON.parse(await readFile(manifestPath,"utf8"));
     if (!Array.isArray(manifest.tracks) || !manifest.tracks.every((track: any) => typeof track.file === "string" && filePattern.test(track.file) && typeof track.username === "string")) throw new Error("Invalid export manifest.");
     if(manifest.transcripts && (!Array.isArray(manifest.transcripts)||!manifest.transcripts.every((file:unknown)=>typeof file==="string"&&/^transcript\.(txt|srt|vtt)$/.test(file))))throw new Error("Invalid transcript files.");
-    if (manifest.mix && !/^mix\.(ogg|wav|flac|mp3)$/.test(manifest.mix)) throw new Error("Invalid mixed file.");
+    if (manifest.mix && !/^mix\.(ogg|wav|flac|mp3|m4a)$/.test(manifest.mix)) throw new Error("Invalid mixed file.");
     if (manifest.notes && manifest.notes !== "notes.json") throw new Error("Invalid notes file.");
     if(manifest.project&&manifest.project!=="project.zip")throw new Error("Invalid project file.");
     const requestedNaming=url.searchParams.get("names");
     const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
     const filename = parts[4];
+    if(!filename&&request.method==="GET"&&url.searchParams.get("view")==="editor"){
+      const waves:Record<string,unknown>={};for(const track of manifest.tracks){const id=/^track-(\d+)\./.exec(track.file)?.[1];if(!id)throw Error("Invalid editor track.");waves[id]=await waveform(path.join(directory,track.file));}
+      let edits:unknown;try{edits=JSON.parse(await readFile(path.join(directory,"editor-state.json"),"utf8"));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+      if(manifest.notes)manifest.notesData=JSON.parse(await readFile(path.join(directory,"notes.json"),"utf8"));return this.json(response,200,{manifest,waves,edits});
+    }
+    if(!filename&&request.method==="GET"&&url.searchParams.get("editor")==="1")return this.html(response,editorPage());
     if(request.method==="POST"){
       if(filename||!this.queue)return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>8192)return this.json(response,413,{error:"Request too large."});}
+      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1048576)return this.json(response,413,{error:"Request too large."});}
       try{
-        const data=JSON.parse(body),start=Number(data.start??0),end=data.end===undefined||data.end===""?undefined:Number(data.end),baseStart=manifest.trim?.start??0,baseEnd=manifest.trim?.end;
+        const data=JSON.parse(body);
+        if(data.action==="save-edit"||data.action==="editor-export"){
+          validateEdits(data.edits,manifest.tracks.map((track:any)=>Number(/^track-(\d+)\./.exec(track.file)?.[1])));
+          if(data.action==="save-edit"){const temporary=path.join(directory,"editor-state-"+randomUUID()+".tmp");await writeFile(temporary,JSON.stringify(data.edits));await import("node:fs/promises").then(fs=>fs.rename(temporary,path.join(directory,"editor-state.json")));return this.json(response,200,{saved:true});}
+          const job=await this.queue.enqueue(parts[2]!,manifest.guildID,data.format??"wav",data.mix===true,{sourceExport:parts[3]!,edits:data.edits,transcribe:data.transcribe===true});return this.json(response,202,{url:this.jobLink(job.id)});
+        }
+        const start=Number(data.start??0),end=data.end===undefined||data.end===""?undefined:Number(data.end),baseStart=manifest.trim?.start??0,baseEnd=manifest.trim?.end;
         if(!Number.isFinite(start)||start<0||(end!==undefined&&(!Number.isFinite(end)||end<=start)))throw new Error("Choose a valid start and end time.");
         if(baseEnd!==undefined&&(baseStart+start>=baseEnd||(end!==undefined&&baseStart+end>baseEnd)))throw new Error("Trim range exceeds this shared excerpt.");
         const source=JSON.parse(await readFile(path.join(this.root,parts[2]!,"session.json"),"utf8"));
@@ -167,8 +189,8 @@ export class DownloadService {
       const toggle=new URLSearchParams(downloadSearch);toggle.set("names",naming==="date"?"original":"date");
       const namesToggle=`<p>Download names: ${naming==="date"?"recording date/time (UTC)":"original filenames"}. <a href="${route}?${escapeHTML(toggle.toString())}">Switch to ${naming==="date"?"original filenames":"date/time names"}</a></p>`;
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="none" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
-      const extras = [[manifest.project,"Download Audition project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
-      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","ogg","wav","flac","mp3"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
+      const extras = [[manifest.project,"Download project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<p><a href="${route}${query}&amp;editor=1">Open multitrack editor</a></p><ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","audacity","ogg","wav","flac","mp3","aac"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
       this.html(response,html); return;
     }
     if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && filename !== manifest.project && filename !== "session.sesx" && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");
@@ -189,7 +211,7 @@ export class DownloadService {
       response.setHeader("Accept-Ranges","bytes");
       response.setHeader("Content-Length",String(Math.max(0,end-start+1)));
       response.setHeader("Content-Disposition",`${url.searchParams.get("preview")==="1"?"inline":"attachment"}; filename="${downloadName(filename,manifest,naming)}"`);
-      response.writeHead(status,{ "Content-Type": ({ogg:"audio/ogg",wav:"audio/wav",flac:"audio/flac",mp3:"audio/mpeg"} as Record<string,string>)[filename.split(".").pop()!]??"application/octet-stream" });
+      response.writeHead(status,{ "Content-Type": ({ogg:"audio/ogg",wav:"audio/wav",flac:"audio/flac",mp3:"audio/mpeg",m4a:"audio/mp4"} as Record<string,string>)[filename.split(".").pop()!]??"application/octet-stream" });
       if (request.method === "HEAD" || !info.size) { response.end(); return; }
       await pipeline(createReadStream("",{ fd: file.fd, autoClose:false, start,end }),response);
     } finally { await file.close(); }

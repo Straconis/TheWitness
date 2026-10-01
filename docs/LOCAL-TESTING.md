@@ -32,9 +32,9 @@ cover the actual disk writer, codecs, recovery, HTTP service and WebSocket audio
 transport, but cannot confirm Discord gateway behavior, real microphone capture,
 host networking, or cloud-account credentials.
 
-Optional transcription requires whisper.cpp and a downloaded speech model.
-Optional cloud upload currently uses owner-provided access tokens; OAuth login
-and automatic refresh are not implemented. These integrations are experimental.
+The testing package includes whisper.cpp and an English speech model. Optional
+cloud upload supports owner browser OAuth connections and automatic refresh.
+See READY-TO-TEST.md for setup and the remaining real-account checks.
 
 Run `node scripts/test-endurance.cjs 10` after compiling for an accelerated
 ten-minute, four-speaker disk recording check and decoded final excerpt.
@@ -46,7 +46,7 @@ concurrent duplicate exports, and restart with interrupted/corrupted export jobs
 Unreadable job files are preserved and skipped so one bad job does not prevent
 the rest of the queue from starting.
 
-The current build passes 57 automated checks. New coverage exercises selected
+The current build passes 65 automated checks. New coverage exercises selected
 event opt-in and ownership, export cancellation and retry, tool timeouts,
 cloud request bodies and safe failure messages, and transcription conversion
 and temporary-file cleanup. Cloud and recognizer fixtures run locally; no real

@@ -34,7 +34,7 @@ raw audio is preserved. All recording feature flags are enabled without tiers.
 Run `npm test` to build and check the recorder. Craig timestamp correction and per-speaker Ogg exports are tested with generated
 audio. Live Discord recording remains unverified. Browser capture, dashboard, durable export jobs and recovery now have local integration checks.
 
-See [the package comparison and implementation sequence](docs/CRAIG-PARITY.md).
+See [the current package comparison](docs/CRAIG-PARITY.md).
 Craig attribution is preserved in [licenses/Craig-ISC.txt](licenses/Craig-ISC.txt).
 
 ## Audio exports
@@ -45,9 +45,9 @@ session with `npm run export -- <session UUID> ogg`. The result is a directory
 inside that session containing numbered speaker files and a manifest mapping
 filenames to participants. This does not require a Discord token.
 
-Replace `ogg` with `wav`, `flac`, or `mp3` to convert through FFmpeg. FFmpeg must
+Replace `ogg` with `wav`, `flac`, `mp3`, `aac`, `audition`, or `audacity` to convert through FFmpeg. FFmpeg must
 be installed on the host, placed in `bin/ffmpeg`, or configured through
-`FFMPEG_PATH`. Ogg, WAV, FLAC and MP3 exports have been verified locally with
+`FFMPEG_PATH`. Ogg, WAV, FLAC, MP3 and AAC exports have been verified locally with
 generated audio and decoding checks. Formats have no payment or tier checks.
 The local FFmpeg executable is excluded from Git. The testing payload includes a
 Linux x86_64 FFmpeg binary and Craig correction tool. To rebuild them, run
@@ -235,3 +235,12 @@ tools, transcription, ZIP creation and upload requests. Files already uploaded
 to a cloud account are not removed. Shutdown interrupts active jobs and queues
 them for restart; cancelled jobs stay cancelled. Optional tools have a bounded
 execution timeout, and each cloud request has a two-minute timeout.
+
+## Completed development handoff
+
+See [READY-TO-TEST.md](docs/READY-TO-TEST.md) for bundled transcription, browser
+cloud-account connections and refresh, AAC/M4A and Audacity import projects, the
+multitrack browser editor, recurring schedules, channel rules and optional
+retention. These features are implemented; account setup, host compatibility
+and real Discord/Adobe/browser behavior remain to be verified. Advanced
+features remain opt-in.

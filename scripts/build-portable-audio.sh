@@ -19,12 +19,12 @@ PKG_CONFIG_PATH="$TASK_PREFIX/lib/pkgconfig" ./configure --prefix="$TASK_PREFIX"
  --disable-everything --enable-ffmpeg --disable-ffplay --disable-ffprobe \
  --disable-x86asm --enable-small --pkg-config-flags=--static \
  --extra-cflags="-I$TASK_PREFIX/include" --extra-ldflags="-L$TASK_PREFIX/lib -static" \
- --enable-protocol=file,pipe --enable-demuxer=ogg,wav,flac,mp3,pcm_s16le \
- --enable-muxer=ogg,wav,flac,mp3,pcm_s16le \
- --enable-decoder=opus,pcm_s16le,flac,mp3,mp3float \
- --enable-encoder=libopus,pcm_s16le,flac,libmp3lame \
- --enable-parser=opus,flac,mpegaudio --enable-libopus --enable-libmp3lame \
- --enable-filter=aresample,amix,anull,atrim,asetpts,adelay \
+ --enable-protocol=file,pipe --enable-demuxer=ogg,wav,flac,mp3,mov,aac,pcm_s16le \
+ --enable-muxer=ogg,wav,flac,mp3,mp4,adts,pcm_s16le \
+ --enable-decoder=opus,pcm_s16le,flac,mp3,mp3float,aac \
+ --enable-encoder=libopus,pcm_s16le,flac,libmp3lame,aac \
+ --enable-parser=opus,flac,mpegaudio,aac --enable-libopus --enable-libmp3lame \
+ --enable-filter=aresample,amix,anull,atrim,asetpts,adelay,volume,pan,afade,apad,asplit \
  > "$TASK_ROOT/work/portable/ffmpeg-configure.log" 2>&1
 make -j2 > "$TASK_ROOT/work/portable/ffmpeg-build.log" 2>&1
 cp ffmpeg "$TASK_ROOT/bin/ffmpeg"

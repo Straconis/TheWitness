@@ -14,16 +14,16 @@ ignored `reference/` checkout. Its ISC notice is preserved in
 | Recording | Separate speaker Opus tracks, bounded jitter handling, reconnects, graceful stop | Live Discord and encryption behavior |
 | Recovery | CRC-checked salvage into a new session; originals preserved | Real interrupted group session |
 | Discord controls | Compact panel, shared notes, titles, optional Bot Wrangler gate | Live permissions, buttons and gateway events |
-| Automation | Persistent autojoin settings; selected voice events; separate opt-in event auto-stop | Live event transitions; advanced recurring schedules/channel rules |
-| Exports | Ogg, WAV, FLAC, MP3, mixed audio, excerpts, Audition SESX with markers and ZIP64 | Open project and markers in Audition; additional Craig formats |
+| Automation | Persistent autojoin settings; selected voice events; separate opt-in event auto-stop | Live event transitions; weekly schedules/time zones and channel rules are now implemented |
+| Exports | Ogg, WAV, FLAC, MP3, mixed audio, excerpts, Audition SESX with markers, Audacity AUP import packages, AAC/M4A and ZIP64 | Open project and markers in Audition; installed Audacity compatibility |
 | Export jobs | Persistent queue, progress, cancel, retry, restart recovery | Hosting restart behavior |
 | Browser capture | Signed microphone client, WebSocket audio, original PCM exports | Real browser microphone and public HTTPS |
-| Web tools | Signed downloads, ranges, preview/crop, dashboard, settings, recovery and deletion | Full Ennuizel multitrack editor; Discord OAuth authentication |
-| Integrations | Optional owner-token cloud adapters and local whisper.cpp execution | Real cloud accounts/model; OAuth connection and automatic token refresh |
+| Web tools | Signed downloads, ranges, preview/crop, dashboard, settings, recovery and deletion | Witness editor implements waveforms/clip editing/mixing; it does not reproduce all Ennuizel UI/features. Web links remain bearer links by design |
+| Integrations | Owner OAuth connection/refresh for four cloud providers; bundled whisper.cpp/base.en | Real cloud accounts and conversation accuracy; real speech execution passed locally |
 | Operations | Disk warnings, bundled audio tools, offline host checker | Host native-library compatibility, quota and port routing |
-| Persistence | Atomic disk-backed settings and jobs | Multiple workers and retention automation |
+| Persistence | Atomic disk-backed settings and jobs | Optional retention implemented; multiple workers are outside this single-host release |
 
-The build and 57 automated checks pass on Linux. Tests exercise generated audio,
+The build and 65 automated checks pass on Linux. Tests exercise generated audio,
 real local codecs and files, simulated Discord connections, HTTP/WebSocket
 transport, and local cloud/recognizer fixtures. They do not prove live Discord,
 real transcription accuracy, cloud authorization, Adobe compatibility or
@@ -31,3 +31,6 @@ bot-hosting.net deployment. See `LOCAL-TESTING.md` for the handoff checks.
 
 An accelerated ten-minute, four-speaker recording test also passed with 120,000
 packets and a decoded final excerpt. This is not a wall-clock network test.
+
+Current setup and verification handoff: `READY-TO-TEST.md`. A/V sync remains
+intentionally deferred. Larger Craig ecosystem parity is not implied.
