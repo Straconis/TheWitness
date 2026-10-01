@@ -1,6 +1,9 @@
 import Eris from "eris";
 
 import { config } from "../config";
+import { RecordingManager } from "../recording/manager";
+
+export const recordings = new RecordingManager(config.recordingPath);
 
 interface GuildSettings {
   autoJoin: boolean;
@@ -93,38 +96,17 @@ async function registerCommands(client: Eris.Client): Promise<void> {
 }
 
 async function joinVoiceChannel(
-  guild: Eris.Guild,
-  channelID: string
-): Promise<void> {
-  const currentChannelID = activeVoiceChannels.get(guild.id);
-
-  if (currentChannelID === channelID) {
-    return;
+  client: Eris.Client, guild: Eris.Guild, channelID: string
+): Promise<Eris.VoiceConnection> {
+  const session = recordings.sessions.get(guild.id);
+  if (session && session.channelID !== channelID) {
+    throw new Error("Stop the existing recording before changing channels.");
   }
-
-  if (currentChannelID) {
-    const oldChannel = guild.channels.get(currentChannelID);
-
-    if (oldChannel && "leave" in oldChannel) {
-      (oldChannel as any).leave();
-    }
-  }
-
-  const channel = guild.channels.get(channelID);
-
-  if (!channel || !("join" in channel)) {
-    throw new Error(`Voice channel ${channelID} cannot be joined.`);
-  }
-
-  await (channel as any).join({
-    opusOnly: true
+  const connection = await client.joinVoiceChannel(channelID, {
+    opusOnly: true, selfDeaf: false, selfMute: false
   });
-
   activeVoiceChannels.set(guild.id, channelID);
-
-  console.log(
-    `[Voice] Joined ${channel.name} (${channelID}) in ${guild.name}`
-  );
+  return connection;
 }
 
 function leaveVoiceChannel(guild: Eris.Guild): boolean {
@@ -165,7 +147,7 @@ export function createDiscordClient(): Eris.Client {
   });
 
   client.on("voiceChannelJoin", async (member, channel) => {
-    if (member.id === client.user.id) {
+    if (member.bot || member.id === client.user.id) {
       return;
     }
 
@@ -176,7 +158,7 @@ export function createDiscordClient(): Eris.Client {
       return;
     }
 
-    if (activeVoiceChannels.has(guild.id)) {
+    if (client.voiceConnections.has(guild.id)) {
       return;
     }
 
@@ -185,13 +167,14 @@ export function createDiscordClient(): Eris.Client {
         `[AutoJoin] ${member.username} entered ${channel.name}`
       );
 
-      await joinVoiceChannel(guild, channel.id);
-
-      if (settings.autoRecord) {
-        console.log(
-          `[AutoRecord] Recording requested in ${channel.name}`
-        );
-      }
+      await recordings.exclusive(guild.id, async () => {
+        if (client.voiceConnections.has(guild.id)) return;
+        const connection = await joinVoiceChannel(client, guild, channel.id);
+        if (settings.autoRecord) {
+          const session = await recordings.start(guild, channel.id, connection);
+          console.log(`[AutoRecord] Started session ${session.id}`);
+        }
+      });
     } catch (error) {
       console.error("[AutoJoin] Failed:", error);
     }
@@ -245,7 +228,8 @@ export function createDiscordClient(): Eris.Client {
     const settings = getSettings(guildID);
 
     if (commandName === "status") {
-      const voiceChannelID = activeVoiceChannels.get(guildID);
+      const voiceChannelID = client.voiceConnections.get(guildID)?.channelID;
+      const session = recordings.sessions.get(guildID);
 
       await interaction.createMessage({
         content:
@@ -255,7 +239,7 @@ export function createDiscordClient(): Eris.Client {
           }\n` +
           `**Auto Join:** ${settings.autoJoin ? "Enabled" : "Disabled"}\n` +
           `**Auto Record:** ${settings.autoRecord ? "Enabled" : "Disabled"}\n` +
-          "**Recording:** Engine not connected yet"
+          `**Recording:** ${session ? `Active (${session.id}) — ${session.tracks.size} tracks, ${session.packets} packets saved` : "Inactive"}`
       });
 
       return;
@@ -331,20 +315,19 @@ export function createDiscordClient(): Eris.Client {
         return;
       }
 
+      await interaction.defer();
       try {
-        await joinVoiceChannel(guild, voiceChannelID);
-
-        await interaction.createMessage({
-          content:
-            "**The Witness is listening.**\n" +
-            `Voice channel: <#${voiceChannelID}>`
+        const session = await recordings.exclusive(guildID, async () => {
+          const connection = await joinVoiceChannel(client, guild, voiceChannelID);
+          return recordings.start(guild, voiceChannelID, connection);
+        });
+        await interaction.editOriginalMessage({
+          content: `**The Witness is recording.**\nVoice channel: <#${voiceChannelID}>\nSession: ${session.id}`
         });
       } catch (error) {
-        console.error("[Voice] Failed to join:", error);
-
-        await interaction.createMessage({
-          content: "I could not connect to your voice channel.",
-          flags: 64
+        console.error("[Recording] Failed to start:", error);
+        await interaction.editOriginalMessage({
+          content: "Recording could not start. Check the bot logs; if another channel is recording, stop it first."
         });
       }
 
@@ -352,17 +335,21 @@ export function createDiscordClient(): Eris.Client {
     }
 
     if (commandName === "stop") {
-      if (!leaveVoiceChannel(guild)) {
-        await interaction.createMessage({
-          content: "The Witness is not currently listening.",
-          flags: 64
+      await interaction.defer();
+      try {
+        const session = await recordings.exclusive(guildID, async () => {
+          try { return await recordings.stop(guildID); }
+          finally { leaveVoiceChannel(guild); }
         });
-        return;
+        await interaction.editOriginalMessage({
+          content: session
+            ? `**Recording saved.**\nSession: ${session.id}\nTracks: ${session.tracks.size}; audio packets: ${session.packets}.`
+            : "The Witness is not recording. Voice connection closed."
+        });
+      } catch (error) {
+        console.error("[Recording] Failed to stop:", error);
+        await interaction.editOriginalMessage({ content: "Recording stopped with a storage error. Check the bot logs before using the session files." });
       }
-
-      await interaction.createMessage({
-        content: "**The Witness has stopped listening.**"
-      });
     }
   });
 

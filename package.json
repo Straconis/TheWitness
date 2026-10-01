@@ -1,7 +1,7 @@
 {
   "name": "the-witness",
   "version": "0.1.0",
-  "description": "Private self-hosted multitrack Discord voice recorder.",
+  "description": "Private hosted multitrack Discord recording package based on Craig.",
   "main": "dist/index.js",
   "directories": {
     "doc": "docs",
@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test tests/*.test.cjs"
   },
   "keywords": [],
   "author": "",

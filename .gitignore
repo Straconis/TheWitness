@@ -28,3 +28,6 @@ build/
 
 # Node dependencies
 node_modules/
+
+# Local development scratch files
+work/
