@@ -1,5 +1,6 @@
 // Craig split-file layout and Opus headers adapted from commit 60d1a00.
 // See licenses/Craig-ISC.txt for copyright and permission notice.
+import { validateTitle } from "../storage/titles";
 import { mkdir, open, rename, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -12,6 +13,7 @@ const OPUS_TAGS = Buffer.from([0x4f,0x70,0x75,0x73,0x54,0x61,0x67,0x73,9,0,0,0,0
 interface Track { id: string; username: string; track: number; packet: number; pcmFile?:string; pcmSamples?:number; pcmStart?:number }
 
 export class RecordingSession {
+  title?:string;
   readonly id = randomUUID();
   readonly startedAt = new Date().toISOString();
   readonly tracks = new Map<string, Track>();
@@ -70,11 +72,18 @@ export class RecordingSession {
   private async metadata(endedAt?: string): Promise<void> {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
-      id: this.id, guildID: this.guildID, channelID: this.channelID,
+      id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID,
       startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats,
       error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
+  }
+
+  setTitle(value:unknown):Promise<void>{
+    const title=validateTitle(value);
+    if(!this.accepting||this.failure)return Promise.reject(new Error("Session is closed."));
+    const task=this.queue.then(async()=>{this.title=title;await this.metadata();});
+    this.queue=task.catch(error=>{this.failure=error instanceof Error?error:new Error(String(error));});return task;
   }
 
   elapsedSamples(): bigint { return (process.hrtime.bigint() - this.start) * 48000n / 1000000000n; }

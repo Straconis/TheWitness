@@ -19,7 +19,7 @@ test('voice reconnection preserves the session and resumes capture',async()=>{
 test('browser frames become speaker tracks; dashboard and export queue work together',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-browser-'));const manager=new RecordingManager(root),queue=new ExportQueue(root),settings=new SettingsStore(path.join(root,'settings.json'));let service;
  try{
-  await settings.load();await queue.load();service=await DownloadService.create(root,'http://localhost');service.attach(queue,settings,manager);const port=await service.listen(0,'127.0.0.1');
+  await settings.load();await queue.load();service=await DownloadService.create(root,'http://localhost');service.attach(queue,settings,manager,new (require('../dist/storage/space').StorageMonitor)(root));const port=await service.listen(0,'127.0.0.1');
   const local=url=>url.replace('http://localhost',`http://127.0.0.1:${port}`);
   const {voice}=connection();const session=await manager.start({id:'guild',members:new Map()},'voice',voice);
   const browser=local(service.browserLink(session.id));const page=await fetch(browser);assert.equal(page.status,200);assert.ok((await page.text()).includes('AudioWorklet'));
@@ -28,7 +28,8 @@ test('browser frames become speaker tracks; dashboard and export queue work toge
   await wait(()=>session.packets===1);assert.ok([...session.tracks.values()][0].id.startsWith('browser-'));
   ws.close();await once(ws,'close');await manager.exclusive('guild',()=>manager.stop('guild'));
   const dashboard=local(service.dashboardLink('guild'));
-  const state=await (await fetch(dashboard,{headers:{Accept:'application/json'}})).json();assert.equal(state.sessions.length,1);
+  const state=await (await fetch(dashboard,{headers:{Accept:'application/json'}})).json();assert.equal(state.sessions.length,1);assert.ok(state.storage.availableBytes>=0);
+  const named=await fetch(dashboard,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'title',session:session.id,title:'Session from dashboard'})});assert.equal(named.status,200);await named.text();assert.equal(JSON.parse(await readFile(path.join(session.directory,'session.json'))).title,'Session from dashboard');
   const saved=await fetch(dashboard,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'settings',autoJoin:false,autoRecord:true})});assert.equal(saved.status,200);await saved.text();assert.equal(settings.get('guild').autoJoin,true);
   const badOrigin=await fetch(dashboard,{method:'POST',headers:{Origin:'https://evil.example','Content-Type':'application/json'},body:'{}'});assert.equal(badOrigin.status,403);await badOrigin.text();
   const job=await queue.enqueue(session.id,'guild','ogg');await wait(()=>queue.get(job.id)?.state==='completed');

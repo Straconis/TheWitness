@@ -1,4 +1,6 @@
 import Eris from "eris";
+import { StorageMonitor } from "../storage/space";
+import { renameSession,validateTitle } from "../storage/titles";
 import { downloadName } from "../downloads/names";
 import { deleteSession } from "../storage/delete";
 import { ExportQueue } from "../exports/jobs";
@@ -13,6 +15,7 @@ import { archiveExport } from "../exports/archive";
 import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
 
+export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes);
 export const recordings = new RecordingManager(config.recordingPath);
 
 export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
@@ -23,6 +26,7 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"title",description:"Name the active recording or a saved session.",options:[{type:3,name:"text",description:"Recording title",required:true,max_length:120},{type:3,name:"session",description:"Saved session ID (omit for the active recording)"}]},
       {type:1,name:"downloadnames",description:"Choose recording date/time or original download filenames.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Recording date/time (UTC)",value:"date"},{name:"Original filenames",value:"original"}]}]},
       { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
       { type:1,name:"webapp",description:"Get a private browser microphone link for the current recording." },
@@ -40,7 +44,8 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       {
         type: 1,
         name: "record",
-        description: "Join your voice channel and begin recording."
+        description: "Join your voice channel and begin recording.",
+        options:[{type:3,name:"title",description:"Optional recording title",max_length:120}]
       },
       {
         type: 1,
@@ -237,6 +242,11 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
+    if(commandName==="title"){
+      const options=interaction.data?.options??[],text=validateTitle(options.find((option:any)=>option.name==="text")?.value),id=options.find((option:any)=>option.name==="session")?.value;
+      await interaction.defer(64);await recordings.exclusive(guildID,async()=>{const active=recordings.sessions.get(guildID);if(active&&(!id||active.id===id))await active.setTitle(text);else if(id)await renameSession(config.recordingPath,id,guildID,text);else throw new Error("Start a recording or provide a saved session ID.");});
+      await interaction.editOriginalMessage({content:`Recording title saved: ${text}`,allowedMentions:{parse:[]}});return;
+    }
     if(commandName==="downloadnames"){
       const style=interaction.data?.options?.find((option:any)=>option.name==="style")?.value;
       if(!["date","original"].includes(style))throw new Error("Invalid naming style.");
@@ -283,7 +293,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       try {
         const sessions = (await listSessions(config.recordingPath, guildID)).slice(0, 10);
         await interaction.editOriginalMessage({ content: sessions.length
-          ? "**Recent recordings**\n" + sessions.map(session => `\`${session.id}\` — ${session.state}, ${session.tracks.length} tracks\n${session.startedAt}`).join("\n")
+          ? "**Recent recordings**\n" + sessions.map(session => `\`${session.id}\` — ${session.title?session.title+" — ":""}${session.state}, ${session.tracks.length} tracks\n${session.startedAt}`).join("\n")
           : "No saved recordings in this server yet." });
       } catch (error) {
         console.error("[Recordings]", error);
@@ -320,7 +330,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           return;
         }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
-        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt},settings.downloadNaming??"date") }] });
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,title:sourceSession.title},settings.downloadNaming??"date") }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
@@ -331,6 +341,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
 
     if (commandName === "status") {
+      const disk=await storageMonitor.check().catch(()=>undefined);
       const voiceChannelID = client.voiceConnections.get(guildID)?.channelID;
       const session = recordings.sessions.get(guildID);
 
@@ -342,6 +353,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           }\n` +
           `**Auto Join:** ${settings.autoJoin ? "Enabled" : "Disabled"}\n` +
           `**Auto Record:** ${settings.autoRecord ? "Enabled" : "Disabled"}\n` +
+          `**Disk space:** ${disk?`${(disk.availableBytes/1024**3).toFixed(2)} GiB available${disk.low?" — LOW SPACE":""}`:"Unavailable"}\n` +
+          `**Title:** ${session?.title??"Untitled"}\n` +
           `**Recording:** ${session ? `${session.voiceState === "reconnecting" ? "Reconnecting" : "Active"} (${session.id}) — ${session.tracks.size} tracks, ${session.packets} packets saved` : "Inactive"}`
       });
 
@@ -417,11 +430,14 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         return;
       }
 
+      const proposedTitle=interaction.data?.options?.find((option:any)=>option.name==="title")?.value;
+      const title=proposedTitle===undefined?undefined:validateTitle(proposedTitle);
       await interaction.defer();
       try {
         const session = await recordings.exclusive(guildID, async () => {
           const connection = await joinVoiceChannel(client, guild, voiceChannelID);
-          return recordings.start(guild, voiceChannelID, connection, () => client.joinVoiceChannel(voiceChannelID, {opusOnly:true,selfDeaf:false}));
+          const session=await recordings.start(guild, voiceChannelID, connection, () => client.joinVoiceChannel(voiceChannelID, {opusOnly:true,selfDeaf:false}));
+          if(title)await session.setTitle(title);return session;
         });
         await interaction.editOriginalMessage({
           content: `**The Witness is recording.**\nVoice channel: <#${voiceChannelID}>\nSession: ${session.id}`

@@ -1,4 +1,6 @@
 import { downloadName, DownloadNaming } from "./names";
+import { renameSession } from "../storage/titles";
+import { StorageMonitor } from "../storage/space";
 import { WebSocketServer } from "ws";
 import { OpusEncoder } from "@discordjs/opus";
 import { browserPage } from "./browser-page";
@@ -25,10 +27,11 @@ const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": 
 export class DownloadService {
   private server?: Server;
   private sockets = new WebSocketServer({ noServer:true, maxPayload:1924 });
+  private space?:StorageMonitor;
   private queue?:ExportQueue;
   private settings?:SettingsStore;
   private manager?:RecordingManager;
-  attach(queue:ExportQueue,settings:SettingsStore,manager:RecordingManager):void {this.queue=queue;this.settings=settings;this.manager=manager;}
+  attach(queue:ExportQueue,settings:SettingsStore,manager:RecordingManager,space?:StorageMonitor):void {this.space=space;this.queue=queue;this.settings=settings;this.manager=manager;}
   private liveSession(id:string):RecordingSession|undefined {return [...(this.manager?.sessions.values() ?? [])].find(session=>session.id===id);}
   private issue(route:string,lifetimeSeconds=86400):string {const expires=String(Math.floor(Date.now()/1000)+lifetimeSeconds);return `${this.publicURL}${route}?expires=${expires}&signature=${this.signature(route,expires)}`;}
   browserLink(id:string):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/browser/${id}`);}
@@ -47,7 +50,7 @@ export class DownloadService {
     const guildID=url.pathname.slice(11);
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{settings:this.settings.get(guildID),sessions:await listSessions(this.root,guildID)});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage());
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -61,6 +64,7 @@ export class DownloadService {
         if(data.downloadNaming!==undefined&&!["date","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
         await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {})});return this.json(response,200,{saved:true});
       }
+      if(data.action==="title"){await this.manager.exclusive(guildID,async()=>{const active=this.manager!.sessions.get(guildID);if(active&&active.id===data.session)await active.setTitle(data.title);else await renameSession(this.root,data.session,guildID,data.title);});return this.json(response,200,{saved:true});}
       if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true);return this.json(response,202,{url:this.jobLink(job.id)});}
       if(data.action==="recover"){const id=await this.manager.exclusive(guildID,()=>recoverSession(this.root,data.session,guildID));return this.json(response,200,{id});}
       return this.json(response,400,{error:"Unknown action."});
@@ -157,7 +161,7 @@ export class DownloadService {
       const namesToggle=`<p>Download names: ${naming==="date"?"recording date/time (UTC)":"original filenames"}. <a href="${route}?${escapeHTML(toggle.toString())}">Switch to ${naming==="date"?"original filenames":"date/time names"}</a></p>`;
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="none" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
       const extras = [[manifest.project,"Download Audition project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
-      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>The Witness</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","ogg","wav","flac","mp3"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","ogg","wav","flac","mp3"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
       this.html(response,html); return;
     }
     if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && filename !== manifest.project && filename !== "session.sesx" && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");

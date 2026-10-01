@@ -100,15 +100,17 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     }
     if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
+    let exportedNotes:Array<{seconds:number;text:string;authorID?:string}>=[];
     try {
       const lines = (await readFile(path.join(directory,"notes.jsonl"),"utf8")).trim();
       if (lines) {
-        notes = "notes.json";
-        await writeFile(path.join(temporary,notes),JSON.stringify(lines.split("\n").map(line => JSON.parse(line)),null,2));
+        const origin=(metadata.audioOrigin??0)/48000;
+        exportedNotes=lines.split("\n").map(line=>JSON.parse(line)).map(note=>{if(!Number.isFinite(note.seconds)||typeof note.text!=="string")throw new Error("Invalid recording note.");return {...note,seconds:note.seconds-origin};}).filter(note=>note.seconds>=start&&(end===undefined||note.seconds<end)).map(note=>({...note,seconds:note.seconds-start}));
+        if(exportedNotes.length){notes="notes.json";await writeFile(path.join(temporary,notes),JSON.stringify(exportedNotes,null,2));}
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if(requestedFormat==="audition")await writeAudition(temporary,manifest);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, format:requestedFormat, project:requestedFormat==="audition"?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, title:metadata.title, format:requestedFormat, project:requestedFormat==="audition"?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(requestedFormat==="audition")await writeProjectZip(temporary);
     await rename(temporary, target);
     return target;

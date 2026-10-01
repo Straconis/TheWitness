@@ -11,7 +11,10 @@ Implemented in the latest sweep:
 - Preserve and skip corrupt export-job metadata while other jobs resume.
 - Protect sample-zero audio timestamps from being misread as Ogg headers.
 
-Suggested next improvements:
+Added in the following sweep: session titles, notes as Audition XMP markers,
+and disk-space monitoring/alerts. Audition marker display still needs testing.
+
+Further improvement ideas:
 
 1. Session titles and tags, such as campaign and episode, alongside date/time.
    This would make dashboards and downloaded projects easier to find later.

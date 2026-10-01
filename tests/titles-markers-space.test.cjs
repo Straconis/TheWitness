@@ -1,0 +1,22 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {mkdtemp,readFile,writeFile,rm}=require('node:fs/promises');const os=require('node:os');const path=require('node:path');const {spawnSync}=require('node:child_process');const {OpusEncoder}=require('@discordjs/opus');const {RecordingSession}=require('../dist/recording/session');const {exportSession}=require('../dist/exports/export');const {renameSession}=require('../dist/storage/titles');const {getSession}=require('../dist/storage/sessions');const {StorageMonitor}=require('../dist/storage/space');const {downloadName}=require('../dist/downloads/names');
+test('titles survive finalization and saved renaming is guild-scoped without changing audio',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-title-'));
+ try{const session=await RecordingSession.create(root,'guild','voice');await session.setTitle('Campaign — Episode 1');await session.append(Buffer.from([0xf8,0xff,0xfe]),'user','User');await session.close();assert.equal((await getSession(root,session.id,'guild')).title,'Campaign — Episode 1');const before=await readFile(path.join(session.directory,'audio.ogg.data'));await assert.rejects(renameSession(root,session.id,'other','No'));await assert.rejects(renameSession(root,session.id,'guild','bad\nname'));await renameSession(root,session.id,'guild','Episode 2');assert.equal((await getSession(root,session.id,'guild')).title,'Episode 2');assert.deepEqual(await readFile(path.join(session.directory,'audio.ogg.data')),before);assert.ok(downloadName('project.zip',{startedAt:session.startedAt,title:'Episode 2'},'date').includes('_Episode_2_'));
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+test('Audition notes become escaped timeline markers; clipped exports exclude outside notes and shift times',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-marker-'));
+ try{const session=await RecordingSession.create(root,'guild','voice'),encoder=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840);await session.setTitle('Title & <friends>');for(let frame=0;frame<100;frame++)await session.append(encoder.encode(pcm),'user','User',frame*960,BigInt(frame*960+48000),pcm);await session.close();const sourceNotes=[{seconds:1.2,text:'before',authorID:'u'},{seconds:1.75,text:'Dragon & <door> ]]>',authorID:'u'},{seconds:2.5,text:'after',authorID:'u'}];const raw=sourceNotes.map(note=>JSON.stringify(note)).join('\n')+'\n';await writeFile(path.join(session.directory,'notes.jsonl'),raw);
+ const output=await exportSession(root,session.id,{format:'audition',trimStart:0.5,trimEnd:1});const notes=JSON.parse(await readFile(path.join(output,'notes.json')));assert.equal(notes.length,1);assert.equal(notes[0].seconds,0.25);assert.equal(await readFile(path.join(session.directory,'notes.jsonl'),'utf8'),raw);
+ const result=spawnSync('python3',['-c',`import xml.etree.ElementTree as E,sys
+root=E.parse(sys.argv[1]).getroot();xmp=E.fromstring(root.find('./session/xmpMetadata').text)
+ns={'dm':'http://ns.adobe.com/xmp/1.0/DynamicMedia/','dc':'http://purl.org/dc/elements/1.1/','rdf':'http://www.w3.org/1999/02/22-rdf-syntax-ns#'}
+assert [n.text for n in xmp.findall('.//dm:startTime',ns)]==['12000']
+assert xmp.find('.//dm:name',ns).text=='Dragon & <door> ]]>'
+assert xmp.find('.//dc:title/rdf:Alt/rdf:li',ns).text=='Title & <friends>'`,path.join(output,'session.sesx')],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+test('low-space warnings fire on transition, recover and retrigger without repeated alerts',async()=>{
+ let available=50;const warnings=[],monitor=new StorageMonitor('/unused',100,async()=>({bavail:available,bsize:1,blocks:1000}),message=>warnings.push(message));await monitor.check();await monitor.check();assert.equal(warnings.length,1);assert.equal(monitor.status.low,true);const copy=monitor.status;copy.low=false;assert.equal(monitor.status.low,true);available=200;await monitor.check();assert.equal(monitor.status.low,false);available=20;await monitor.check();assert.equal(warnings.length,2);assert.equal(monitor.status.availableBytes,20);monitor.close();
+});
+test('storage monitor measures the actual recording filesystem',async()=>{const monitor=new StorageMonitor(os.tmpdir());const status=await monitor.check();assert.ok(status.totalBytes>0);assert.ok(status.availableBytes>=0);monitor.close();});

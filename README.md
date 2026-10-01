@@ -155,3 +155,22 @@ toggle. Changing names preserves private URL authorization and source files.
 Clipped exports add their selected range to readable filenames. The Audition
 ZIP uses readable naming too; names inside the project ZIP stay stable so the
 session's media references keep working.
+
+## Titles, edit markers and storage warnings
+
+Start with `/record title:Campaign episode 1`, or name the active recording
+using `/title text:Campaign episode 1`. Add `session:<UUID>` to `/title` to name
+a saved session. Titles also have a dashboard control and appear in recordings,
+download pages and readable filenames. Existing exports retain their snapshot
+title; export again after a rename to use the new title.
+
+Session notes export into the Audition session as XMP cue markers. Marker times
+are relative to the exported audio. Excerpts include only notes in their selected
+range and shift those notes to the excerpt timeline; original notes stay intact.
+Audition must still verify how it displays these markers.
+
+Storage checks run at startup and once a minute. Below `LOW_DISK_WARNING_GIB`
+(default 1 GiB), the console logs a warning when entering the low-space state.
+The dashboard and `/status` show available space and a low-space warning. No
+automatic deletion or artificial recording-duration limit is added. Filesystem
+free space does not necessarily reflect hosting-provider storage quotas.
