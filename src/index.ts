@@ -1,3 +1,4 @@
+import { ExportQueue } from "./exports/jobs";
 import { DownloadService } from "./downloads/service";
 import { mkdir } from "node:fs/promises";
 
@@ -20,16 +21,18 @@ async function main(): Promise<void> {
 
   console.log(`[Storage] Recordings: ${config.recordingPath}`);
 
+  const exportQueue = new ExportQueue(config.recordingPath);
+  await exportQueue.load();
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
-  if (downloads) await downloads.listen(config.downloadPort!);
-  const client = createDiscordClient(downloads);
+  if (downloads) { downloads.attach(exportQueue,settingsStore,recordings); await downloads.listen(config.downloadPort!); }
+  const client = createDiscordClient(downloads,exportQueue);
 
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { await recordings.shutdown(); }
+    try { await recordings.shutdown(); await exportQueue.close(); }
     catch (error) { console.error("[Shutdown]", error); process.exitCode = 1; }
     finally { client.disconnect({ reconnect: false }); await downloads?.close(); }
   };

@@ -1,4 +1,7 @@
 import Eris from "eris";
+import { deleteSession } from "../storage/delete";
+import { ExportQueue } from "../exports/jobs";
+import { recoverSession } from "../recording/salvage";
 import type { DownloadService } from "../downloads/service";
 import path from "node:path";
 import { SettingsStore } from "../storage/settings";
@@ -19,12 +22,18 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
+      { type:1,name:"webapp",description:"Get a private browser microphone link for the current recording." },
+      { type:1,name:"dashboard",description:"Open the private recording dashboard for this server." },
+      { type: 1, name: "recover", description: "Recover saved audio from an interrupted recording.", options: [{ type: 3, name: "session", description: "Interrupted session ID", required: true }] },
       { type: 1, name: "note", description: "Add a timestamped note to the current recording.", options: [{ type: 3, name: "text", description: "Your session note", required: true, max_length: 2000 }] },
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
         { type: 3, name: "format", description: "Audio format", choices: ["ogg","wav","flac","mp3"].map(value => ({ name: value.toUpperCase(), value })) },
-        { type: 5, name: "mix", description: "Also include mixed session audio" }
+        { type: 5, name: "mix", description: "Also include mixed session audio" },
+        { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
+        { type: 3, name: "upload", description: "Upload to your configured cloud account", choices:["dropbox","google","onedrive","box"].map(value=>({name:value,value})) }
       ] },
       {
         type: 1,
@@ -124,7 +133,7 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
   return true;
 }
 
-export function createDiscordClient(downloads?: DownloadService): Eris.Client {
+export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
     gateway: { intents: ["guilds", "guildVoiceStates"] }
   });
@@ -166,7 +175,7 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
         if (client.voiceConnections.has(guild.id)) return;
         const connection = await joinVoiceChannel(client, guild, channel.id);
         if (settings.autoRecord) {
-          const session = await recordings.start(guild, channel.id, connection);
+          const session = await recordings.start(guild, channel.id, connection, () => client.joinVoiceChannel(channel.id, {opusOnly:true,selfDeaf:false}));
           console.log(`[AutoRecord] Started session ${session.id}`);
         }
       });
@@ -226,6 +235,29 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
 
     const settings = getSettings(guildID);
 
+    if(commandName==="delete"){
+      const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="session")?.value;
+      if(options.find((option:any)=>option.name==="confirm")?.value!==true){await interaction.createMessage({content:"Set confirm:true to permanently delete this session and its exports.",flags:64});return;}
+      if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to delete recordings.",flags:64});return;}
+      await interaction.defer(64);
+      if(exportQueue?.busy(id))throw new Error("Wait for this recording's export to finish before deleting it.");
+      await recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID));
+      await interaction.editOriginalMessage({content:"Recording and exports permanently deleted."});return;
+    }
+    if (commandName === "webapp" || commandName === "dashboard") {
+      if(!downloads) {await interaction.createMessage({content:"Configure the public download service to enable browser access.",flags:64});return;}
+      const session=recordings.sessions.get(guildID);
+      if(commandName==="webapp"&&!session){await interaction.createMessage({content:"Start a recording before connecting a browser microphone.",flags:64});return;}
+      const link=commandName==="webapp"?downloads.browserLink(session!.id):downloads.dashboardLink(guildID);
+      await interaction.createMessage({content:`[Open ${commandName==="webapp"?"browser recording":"your dashboard"}](${link})\nThis private link expires in 24 hours.`,flags:64});return;
+    }
+    if (commandName === "recover") {
+      await interaction.defer(64);
+      const sourceID = interaction.data?.options?.find((option: any) => option.name === "session")?.value;
+      const id = await recordings.exclusive(guildID, () => recoverSession(config.recordingPath,sourceID,guildID));
+      await interaction.editOriginalMessage({ content: `Recovered saved audio into session \`${id}\`. The original files were preserved. You can export the recovered session.` });
+      return;
+    }
     if (commandName === "note") {
       await interaction.defer(64);
       const text = interaction.data?.options?.find((option: any) => option.name === "text")?.value;
@@ -264,6 +296,15 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
         const format = (options.find((option: any) => option.name === "format")?.value ?? "ogg") as ExportFormat;
         await getSession(config.recordingPath, id, guildID);
         const mix = options.find((option: any) => option.name === "mix")?.value === true;
+        if(downloads&&exportQueue){
+          const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
+          const upload=options.find((option:any)=>option.name==="upload")?.value;
+          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload});
+          await interaction.editOriginalMessage({content:`Your export is queued.\n[Open export status](${downloads.jobLink(job.id)})`});return;
+        }
+        if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
+          await interaction.editOriginalMessage({content:"Enable the download service to use queued transcription or cloud uploads."});return;
+        }
         const directory = await exportSession(config.recordingPath, id, { format, mix });
         if (downloads) {
           const link = downloads.link(id, path.basename(directory));
@@ -293,7 +334,7 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
           }\n` +
           `**Auto Join:** ${settings.autoJoin ? "Enabled" : "Disabled"}\n` +
           `**Auto Record:** ${settings.autoRecord ? "Enabled" : "Disabled"}\n` +
-          `**Recording:** ${session ? `Active (${session.id}) — ${session.tracks.size} tracks, ${session.packets} packets saved` : "Inactive"}`
+          `**Recording:** ${session ? `${session.voiceState === "reconnecting" ? "Reconnecting" : "Active"} (${session.id}) — ${session.tracks.size} tracks, ${session.packets} packets saved` : "Inactive"}`
       });
 
       return;
@@ -372,7 +413,7 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
       try {
         const session = await recordings.exclusive(guildID, async () => {
           const connection = await joinVoiceChannel(client, guild, voiceChannelID);
-          return recordings.start(guild, voiceChannelID, connection);
+          return recordings.start(guild, voiceChannelID, connection, () => client.joinVoiceChannel(voiceChannelID, {opusOnly:true,selfDeaf:false}));
         });
         await interaction.editOriginalMessage({
           content: `**The Witness is recording.**\nVoice channel: <#${voiceChannelID}>\nSession: ${session.id}`
@@ -389,6 +430,7 @@ export function createDiscordClient(downloads?: DownloadService): Eris.Client {
 
     if (commandName === "stop") {
       await interaction.defer();
+      recordings.cancelReconnect(guildID);
       try {
         const session = await recordings.exclusive(guildID, async () => {
           try { return await recordings.stop(guildID); }

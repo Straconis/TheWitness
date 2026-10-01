@@ -19,17 +19,17 @@ additional notices when adapting other components or bundled dependencies.
 | Component | Craig source | The Witness today | Remaining work |
 | --- | --- | --- | --- |
 | Discord bot | apps/bot | Commands and voice joining | Typed interactions, command acknowledgement, live connection tests |
-| Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Reconnect behavior and end-to-end recording validation |
-| Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Reconnection and validated recovery/export of interrupted files |
+| Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Automatic reconnect implemented; live end-to-end validation remains |
+| Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Recovery into a new exportable session implemented and locally tested |
 | Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
 | Notes and recording management | bot/commands | Server-scoped listing, notes and exports | Richer info, deletion and access-policy refinement |
-| Browser recording | recorder/webapp.ts | None | Browser client, authorization, WebSocket transport, FLAC and continuous modes |
-| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue and further export format parity |
+| Browser recording | recorder/webapp.ts | Signed links, microphone client, WebSocket PCM, lossless WAV/FLAC source | Real microphone and reconnect testing |
+| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue implemented; further format parity remains |
 | Download interface | apps/ferret | Signed export pages and streamed speaker tracks | Format selection before export, job status, deletion and host routing |
-| Dashboard | apps/dashboard | None | Recording/settings management and authorization |
-| Browser editing/streaming | apps/ennuizel-streamer | None | Editor delivery and recording streaming |
-| Background jobs | apps/tasks | None | Retention, cleanup, upload processing |
-| Persistence and coordination | packages/db, Redis integrations | None | Host-compatible storage and job coordination |
+| Dashboard | apps/dashboard | Signed server-scoped sessions/settings/export/recovery page | OAuth and richer server controls |
+| Browser editing/streaming | apps/ennuizel-streamer | Audio preview, streaming and clipped export requests | Full multitrack Ennuizel editor |
+| Background jobs | apps/tasks | Persistent export queue, optional cloud/transcription adapters | Retention, cleanup, live integration checks |
+| Persistence and coordination | packages/db, Redis integrations | Atomic disk-backed settings and export jobs | Multiple processes/workers |
 | Operations | apps/botctl and deployment files | Console logging | Health/status, deployment configuration, restart behavior |
 | Feature access | bot/config.ts, util.ts, entitlements.ts; consumers elsewhere | Always-enabled recording metadata policy | Apply the policy across bot, browser and export interfaces |
 
@@ -86,3 +86,18 @@ flush, timestamp rollover handling, duplicate/late detection, and shutdown drain
 Tests cover the reorder buffer and its integration with on-disk timestamp pages.
 Automatic reconnection and recovery-to-export of interrupted recordings remain
 unfinished.
+
+## Hosting candidate sweep
+
+Added automatic voice retries, checksummed recovery, persistent export jobs,
+signed browser capture and dashboard pages, deletion, preview/crop exports,
+original browser PCM for WAV/FLAC, subtitle formatting, and optional transcription
+and cloud upload adapters. Source-pinned portable FFmpeg/correction tools are
+built locally. Native Node modules still need hosting-image compatibility checks.
+
+The full Craig package is not yet complete. Full Ennuizel editing, scheduled
+channel rules, retention automation, OAuth connections/refresh, and additional
+export types remain. Transcription execution, cloud account uploads, real browser
+microphones, Discord sessions and public host routing need live verification.
+The earlier verification notes describe incremental milestones; the current
+local checks and deployment limits are documented in `LOCAL-TESTING.md`.

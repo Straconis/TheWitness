@@ -9,15 +9,17 @@ import { BOS, encodeOggPage } from "./ogg";
 
 const OPUS_HEAD = Buffer.from([0x4f,0x70,0x75,0x73,0x48,0x65,0x61,0x64,1,2,0,15,0x80,0xbb,0,0,0,0,0]);
 const OPUS_TAGS = Buffer.from([0x4f,0x70,0x75,0x73,0x54,0x61,0x67,0x73,9,0,0,0,0x6e,0x6f,0x64,0x65,0x2d,0x6f,0x70,0x75,0x73,0,0,0,0,0xff]);
-interface Track { id: string; username: string; track: number; packet: number }
+interface Track { id: string; username: string; track: number; packet: number; pcmFile?:string; pcmSamples?:number; pcmStart?:number }
 
 export class RecordingSession {
   readonly id = randomUUID();
   readonly startedAt = new Date().toISOString();
   readonly tracks = new Map<string, Track>();
   readonly directory: string;
+  voiceState: "connected" | "reconnecting" = "connected";
   state: "recording" | "completed" | "failed" = "recording";
   packetStats = { duplicatesDropped: 0, latePacketsDropped: 0 };
+  audioOrigin?:number;
   packets = 0;
   notes = 0;
   private notePacket = 0;
@@ -69,7 +71,7 @@ export class RecordingSession {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, guildID: this.guildID, channelID: this.channelID,
-      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, packetStats: this.packetStats,
+      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats,
       error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
@@ -77,16 +79,17 @@ export class RecordingSession {
 
   elapsedSamples(): bigint { return (process.hrtime.bigint() - this.start) * 48000n / 1000000000n; }
 
-  append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint): Promise<void> {
+  append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint, originalPCM?:Buffer): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
     if (!userID || !data.length) return Promise.resolve();
-    if (this.pendingBytes + data.length > 16 * 1024 * 1024) {
+    if (this.pendingBytes + data.length + (originalPCM?.length??0) > 16 * 1024 * 1024) {
       this.failure = new Error("Recording storage cannot keep up with incoming audio.");
       return Promise.reject(this.failure);
     }
     const packet = Buffer.from(data);
+    const pcm=originalPCM?Buffer.from(originalPCM):undefined;
     const time = arrival ?? this.elapsedSamples();
-    this.pendingBytes += packet.length;
+    this.pendingBytes += packet.length+(pcm?.length??0);
     const task = this.queue.then(async () => {
       if (this.failure) throw this.failure;
       let track = this.tracks.get(userID);
@@ -97,13 +100,19 @@ export class RecordingSession {
         await this.write("header2", encodeOggPage(0, track.track, 1, OPUS_TAGS));
         await this.write("users", Buffer.from(`,"${track.track}":${JSON.stringify({ id: userID, username, discriminator: "0" })}\n`));
       }
+      this.audioOrigin ??= Number(time);
+      if(pcm){
+        if(pcm.length%4!==0)throw new Error("Invalid stereo PCM frame.");
+        if(!track.pcmFile){track.pcmFile=`browser-track-${track.track}.pcm`;track.pcmStart=Number(time);track.pcmSamples=0;this.files.set(track.pcmFile,await open(path.join(this.directory,track.pcmFile),"wx"));}
+        await this.write(track.pcmFile,pcm);track.pcmSamples!+=pcm.length/4;
+      }
       // Craig stores arrival time and the original RTP timestamp in paired pages.
       await this.write("data", encodeOggPage(time, track.track, track.packet++, packet));
       await this.write("data", encodeOggPage(timestamp >>> 0, track.track, track.packet++, Buffer.alloc(0)));
       this.packets++;
     });
     this.queue = task.catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); })
-      .finally(() => { this.pendingBytes -= packet.length; });
+      .finally(() => { this.pendingBytes -= packet.length+(pcm?.length??0); });
     return task;
   }
 

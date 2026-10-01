@@ -31,3 +31,6 @@ node_modules/
 
 # Local development scratch files
 work/
+
+# Audio build scratch
+ffbuild/

@@ -13,7 +13,8 @@
     "start": "node dist/index.js",
     "test": "npm run build && npm run build:cook && node --test tests/*.test.cjs",
     "build:cook": "node scripts/build-cook.cjs",
-    "export": "node dist/exports/cli.js"
+    "export": "node dist/exports/cli.js",
+    "check:host": "node scripts/check-host.cjs"
   },
   "keywords": [],
   "author": "",
@@ -24,10 +25,12 @@
     "@snazzah/davey": "^0.1.12",
     "dotenv": "^17.4.2",
     "eris": "github:CraigChat/dysnomia#cd792c8ee75970bb44d33baafb6c6ff7123e86f9",
-    "nanoid": "^6.0.1"
+    "nanoid": "^6.0.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   },
@@ -35,5 +38,12 @@
     "@discordjs/opus@0.10.0": true,
     "esbuild@0.28.2": true
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "tar": "7.5.22",
+    "brace-expansion": "1.1.21"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
 }

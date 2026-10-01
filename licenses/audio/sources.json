@@ -1,0 +1,22 @@
+{
+  "ffmpeg-7.1.5.tar.xz": {
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
+    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
+  },
+  "ffmpeg-7.1.5.tar.xz.asc": {
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz.asc",
+    "sha256": "7ce4b9d56e3ef0cd4c3a9c0b2c8a034ac91e6c4c011c1f10b05a8aa7292fca35"
+  },
+  "ffmpeg-devel.asc": {
+    "url": "https://ffmpeg.org/ffmpeg-devel.asc",
+    "sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5"
+  },
+  "opus-1.6.1.tar.gz": {
+    "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+    "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+  },
+  "lame-3.100.tar.gz": {
+    "url": "https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz",
+    "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+  }
+}

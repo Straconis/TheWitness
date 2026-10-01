@@ -32,7 +32,7 @@ recording uses the same engine. Interrupted sessions are marked on startup and
 raw audio is preserved. All recording feature flags are enabled without tiers.
 
 Run `npm test` to build and check the recorder. Craig timestamp correction and per-speaker Ogg exports are tested with generated
-audio. Live Discord recording and the web interfaces remain unfinished.
+audio. Live Discord recording remains unverified. Browser capture, dashboard, durable export jobs and recovery now have local integration checks.
 
 See [the package comparison and implementation sequence](docs/CRAIG-PARITY.md).
 Craig attribution is preserved in [licenses/Craig-ISC.txt](licenses/Craig-ISC.txt).
@@ -49,9 +49,10 @@ Replace `ogg` with `wav`, `flac`, or `mp3` to convert through FFmpeg. FFmpeg mus
 be installed on the host, placed in `bin/ffmpeg`, or configured through
 `FFMPEG_PATH`. Ogg, WAV, FLAC and MP3 exports have been verified locally with
 generated audio and decoding checks. Formats have no payment or tier checks.
-The local FFmpeg executable is excluded from Git and must be installed on each
-deployment host. On a Debian host with administrator access, install it using
-`sudo apt install ffmpeg`; no executable is bundled in the release.
+The local FFmpeg executable is excluded from Git. The testing payload includes a
+Linux x86_64 FFmpeg binary and Craig correction tool. To rebuild them, run
+`python3 scripts/prepare-audio-sources.py`, then
+`sh scripts/build-portable-audio.sh` on a Linux development machine.
 Exports are streamed from disk and processed one track at a time. An interrupted
 or failed recording cannot be exported until its recovery has been validated.
 Use `/recordings` to list recent server sessions and `/export session:<UUID>
@@ -67,7 +68,8 @@ and permission notices are retained in the root license and
 [licenses/Craig-ISC.txt](licenses/Craig-ISC.txt).
 
 Dependencies and external executables retain their own licenses. The local
-FFmpeg test binary is GPL-3.0-or-later and is not tracked in this repository.
+FFmpeg build uses LGPL components and is not tracked in this repository.
+Its notices and pinned upstream source information are in `licenses/audio/`.
 Any deployment package that includes FFmpeg must preserve its notices and
 provide the corresponding source and build information as its license requires.
 The Witness's ISC license does not replace those third-party terms.
@@ -116,4 +118,22 @@ Timestamp epochs reset after more than two seconds of silence to accommodate a
 restarted speaker stream. Dropped duplicate/late packet counts are retained in
 session metadata. The reorder buffer has a 16 MiB aggregate memory budget;
 exceeding it fails the session visibly instead of silently discarding audio.
-Automatic voice reconnection and live Discord validation remain unfinished.
+Automatic reconnection now has local tests. Live Discord validation remains unfinished.
+
+## Local readiness and web features
+
+See [the local testing checklist](docs/LOCAL-TESTING.md) before buying hosting.
+The compiled application targets Node 24. Run `npm run check:host` for offline
+runtime checks. No TypeScript compilation is needed on the hosting service.
+
+With downloads enabled, `/webapp` opens a private browser microphone link for
+an active recording and `/dashboard` opens recording/settings management.
+Browser audio preserves original PCM for lossless WAV/FLAC speaker exports.
+Download pages support audio previews and clipped exports. `/recover` salvages
+checksummed complete audio from interrupted sessions into a new session while
+keeping the original. `/delete` requires explicit confirmation and Manage Server.
+
+Exports persist in a disk-backed queue and resume queued jobs after restart.
+Optional transcription and cloud adapters require additional configuration and
+live verification; see `.env.example`. Full Craig parity is still tracked in
+`docs/CRAIG-PARITY.md`.

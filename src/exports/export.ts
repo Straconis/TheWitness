@@ -8,7 +8,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3";
-export interface ExportOptions { format?: ExportFormat; mix?: boolean; correctorPath?: string; ffmpegPath?: string }
+export interface ExportOptions { format?: ExportFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string): Promise<void> {
@@ -54,6 +54,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   }
   const format = options.format ?? "ogg";
   if (!["ogg", "wav", "flac", "mp3"].includes(format)) throw new Error("Unsupported export format.");
+  const start=options.trimStart??0,end=options.trimEnd;
+  if(!Number.isFinite(start)||start<0||(end!==undefined&&(!Number.isFinite(end)||end<=start)))throw new Error("Invalid trim range.");
   const directory = path.join(root, sessionID);
   const metadata = JSON.parse(await readFile(path.join(directory, "session.json"), "utf8"));
   if (metadata.state !== "completed") throw new Error("Only completed sessions can be exported; interrupted or failed sessions require recovery.");
@@ -70,9 +72,20 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       const ogg = path.join(temporary, `track-${track.track}.ogg`);
       await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"));
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
+      if(start>0||end!==undefined){
+        const trimmed=path.join(temporary,`trim-${track.track}.ogg`);
+        await convert(["-i",ogg,"-ss",String(start),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",trimmed],ffmpegPath(options));
+        await rename(trimmed,ogg);
+      }
       const file = `track-${track.track}.${format}`;
       if (format !== "ogg") {
-        await convert(["-i",ogg,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
+        if(track.pcmFile&&["wav","flac"].includes(format)){
+          if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw new Error("Invalid browser source.");
+          const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
+          const args=["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`];
+          if(start>0)args.push("-ss",String(start));if(end!==undefined)args.push("-t",String(end-start));
+          await convert([...args,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
+        }else await convert(["-i",ogg,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
       }
       manifest.push({ file, userID: track.id, username: track.username });
     }
@@ -91,7 +104,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
         await writeFile(path.join(temporary,notes),JSON.stringify(lines.split("\n").map(line => JSON.parse(line)),null,2));
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, format, tracks: manifest, mix, notes }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, format, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     await rename(temporary, target);
     return target;
   } catch (error) {
