@@ -174,3 +174,19 @@ Storage checks run at startup and once a minute. Below `LOW_DISK_WARNING_GIB`
 The dashboard and `/status` show available space and a low-space warning. No
 automatic deletion or artificial recording-duration limit is added. Filesystem
 free space does not necessarily reflect hosting-provider storage quotas.
+
+## Compact Discord recording panel
+
+`/record` posts one compact panel in the command's text channel, updating it
+in place about every ten seconds. It shows recording duration, track/note counts,
+connection or reconnect state, packet drops and low-disk-space warnings. It uses
+bot message edits so updates continue beyond interaction-token expiry. Automatic
+recordings try to post the panel in the voice channel's text chat. Missing send
+permissions leave recording working and `/status` available.
+
+The panel includes **Status**, **Add note** and **Stop** buttons. Any member of
+the server may use `/note` or the Add note form; they do not need to have started
+the recording or hold an administrator role. Notes retain the author's user ID
+and timestamp. Stopped panels disable their controls; reconnects and completion
+edit the same message. No dashboard window is needed during a game. These Discord
+interactions have offline integration tests; live server behavior remains pending.

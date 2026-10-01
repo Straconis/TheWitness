@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 
 import { markInterruptedSessions } from "./recording/recovery";
 import { config } from "./config";
-import { createDiscordClient, recordings, settingsStore, storageMonitor } from "./discord/client";
+import { createDiscordClient, recordings, settingsStore, storageMonitor, closeRecordingPanels } from "./discord/client";
 
 async function main(): Promise<void> {
   console.log("The Witness v0.1.0");
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     storageMonitor.close();
-    try { await recordings.shutdown(); await exportQueue.close(); }
+    try { await recordings.shutdown(); await closeRecordingPanels(); await exportQueue.close(); }
     catch (error) { console.error("[Shutdown]", error); process.exitCode = 1; }
     finally { client.disconnect({ reconnect: false }); await downloads?.close(); }
   };

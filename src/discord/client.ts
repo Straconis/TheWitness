@@ -1,4 +1,5 @@
 import Eris from "eris";
+import { RecordingPanels,panelBody } from "./panel";
 import { StorageMonitor } from "../storage/space";
 import { renameSession,validateTitle } from "../storage/titles";
 import { downloadName } from "../downloads/names";
@@ -21,6 +22,8 @@ export const recordings = new RecordingManager(config.recordingPath);
 export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
+let recordingPanels:RecordingPanels|undefined;
+export async function closeRecordingPanels():Promise<void>{await recordingPanels?.close();}
 const exportJobs = new Set<string>();
 
 async function registerCommands(client: Eris.Client): Promise<void> {
@@ -145,6 +148,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     gateway: { intents: ["guilds", "guildVoiceStates"] }
   });
 
+  const panels=new RecordingPanels(client,storageMonitor);recordingPanels=panels;
+
   client.on("ready", async () => {
     console.log(
       `[Discord] Logged in as ${client.user.username} (${client.user.id})`
@@ -184,6 +189,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if (settings.autoRecord) {
           const session = await recordings.start(guild, channel.id, connection, () => client.joinVoiceChannel(channel.id, {opusOnly:true,selfDeaf:false}));
           console.log(`[AutoRecord] Started session ${session.id}`);
+          await panels.ensure(channel.id,session).catch(error=>console.warn("[Panel] Could not post in voice-channel chat; /status remains available.",error));
         }
       });
     } catch (error) {
@@ -192,9 +198,21 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   });
 
   client.on("interactionCreate", async (interaction: any) => {
-    if (interaction.type !== 2) {
+    if(interaction.type===3||interaction.type===5){
+      const match=/^witness:(status|note|stop|note-submit):([a-f0-9-]{36})$/i.exec(interaction.data?.custom_id??"");if(!match)return;
+      try{
+        const session=recordings.sessions.get(interaction.guildID);
+        if(!session||session.id!==match[2]){await interaction.createMessage({content:"This recording is no longer active.",flags:64});return;}
+        if(match[1]==="note"&&interaction.type===3){await interaction.createModal({title:"Add a session note",custom_id:`witness:note-submit:${session.id}`,components:[{type:1,components:[{type:4,custom_id:"note",style:2,label:"Note",required:true,max_length:2000}]}]});return;}
+        await interaction.defer(64);
+        if(match[1]==="status"){await interaction.editOriginalMessage({content:panelBody(session,storageMonitor.status?.low).content,allowedMentions:{parse:[]}});return;}
+        if(match[1]==="note-submit"&&interaction.type===5){const text=interaction.data?.components?.flatMap((row:any)=>row.components??[]).find((item:any)=>item.custom_id==="note")?.value;await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)throw new Error("Recording has stopped.");await session.note(text,interaction.member?.id??"unknown");});await interaction.editOriginalMessage({content:"Timestamped note saved."});await panels.update();return;}
+        if(match[1]==="stop"&&interaction.type===3){recordings.cancelReconnect(session.guildID);await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)return;try{await recordings.stop(session.guildID);}finally{const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);}});await interaction.editOriginalMessage({content:"Recording stopped and saved."});await panels.update();return;}
+        await interaction.editOriginalMessage({content:"Unsupported panel action."});
+      }catch(error){console.error('[Panel action]',error);try{const body={content:"The action failed. Check recording status and the bot logs.",flags:64};if(interaction.acknowledged)await interaction.editOriginalMessage(body);else await interaction.createMessage(body);}catch{}}
       return;
     }
+    if (interaction.type !== 2)return;
 
     try {
     const commandName = interaction.data?.name;
@@ -432,13 +450,14 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
       const proposedTitle=interaction.data?.options?.find((option:any)=>option.name==="title")?.value;
       const title=proposedTitle===undefined?undefined:validateTitle(proposedTitle);
-      await interaction.defer();
+      await interaction.defer(64);
       try {
         const session = await recordings.exclusive(guildID, async () => {
           const connection = await joinVoiceChannel(client, guild, voiceChannelID);
           const session=await recordings.start(guild, voiceChannelID, connection, () => client.joinVoiceChannel(voiceChannelID, {opusOnly:true,selfDeaf:false}));
           if(title)await session.setTitle(title);return session;
         });
+        await panels.ensure(interaction.channel.id,session).catch(error=>console.warn("[Panel] Could not post recording panel; /status remains available.",error));
         await interaction.editOriginalMessage({
           content: `**The Witness is recording.**\nVoice channel: <#${voiceChannelID}>\nSession: ${session.id}`
         });
@@ -460,6 +479,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           try { return await recordings.stop(guildID); }
           finally { leaveVoiceChannel(guild); }
         });
+        await panels.update();
         await interaction.editOriginalMessage({
           content: session
             ? `**Recording saved.**\nSession: ${session.id}\nTracks: ${session.tracks.size}; audio packets: ${session.packets}.`
