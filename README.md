@@ -190,3 +190,23 @@ the recording or hold an administrator role. Notes retain the author's user ID
 and timestamp. Stopped panels disable their controls; reconnects and completion
 edit the same message. No dashboard window is needed during a game. These Discord
 interactions have offline integration tests; live server behavior remains pending.
+
+## Optional Bot Wrangler role
+
+Access defaults to everyone. Create a Discord role named **Bot Wrangler** (or
+choose another existing role), then use `/access mode:role role:@BotWrangler`
+to restrict Discord commands, panel buttons, note submissions and automatic join
+triggers to role members. Use `/access mode:everyone` to reopen access, or
+`/access mode:status` to inspect the policy. Assign the role to the DM and anyone
+else who should add notes or control recording. Role mode intentionally gates
+notes too; everyone mode retains shared notes for all server members.
+
+Changing or inspecting this policy requires **Manage Server** permission. Server
+managers can use `/access` without the selected role, preventing configuration
+lockout. Other commands do not have a general administrator bypass. The setting
+survives restarts; a missing/deleted role can be replaced by a server manager.
+`@everyone` cannot be selected as the restricted role.
+
+This policy governs Discord interactions. Existing private browser/download/
+dashboard links remain bearer links: holders can still access their linked web
+features. Do not treat this switch as Discord authentication for the web service.

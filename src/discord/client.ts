@@ -1,4 +1,5 @@
 import Eris from "eris";
+import { mayUseBot } from "./access";
 import { RecordingPanels,panelBody } from "./panel";
 import { StorageMonitor } from "../storage/space";
 import { renameSession,validateTitle } from "../storage/titles";
@@ -29,6 +30,7 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"access",description:"Manage who may use The Witness (Manage Server required).",options:[{type:3,name:"mode",description:"Access policy",required:true,choices:[{name:"Everyone",value:"everyone"},{name:"Bot Wrangler role",value:"role"},{name:"Show current policy",value:"status"}]},{type:8,name:"role",description:"Role allowed to control the bot (required for role mode)"}]},
       {type:1,name:"title",description:"Name the active recording or a saved session.",options:[{type:3,name:"text",description:"Recording title",required:true,max_length:120},{type:3,name:"session",description:"Saved session ID (omit for the active recording)"}]},
       {type:1,name:"downloadnames",description:"Choose recording date/time or original download filenames.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Recording date/time (UTC)",value:"date"},{name:"Original filenames",value:"original"}]}]},
       { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
@@ -170,7 +172,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const guild = channel.guild;
     const settings = getSettings(guild.id);
 
-    if (!settings.autoJoin) {
+    if (!settings.autoJoin || !mayUseBot(settings,member.roles)) {
       return;
     }
 
@@ -198,6 +200,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   });
 
   client.on("interactionCreate", async (interaction: any) => {
+    const wranglerSettings=interaction.guildID?settingsStore.get(interaction.guildID):undefined;
+    // Only access-policy configuration bypasses the role gate; its handler requires Manage Server.
+    const configuringAccess=interaction.type===2&&interaction.data?.name==="access";
+    if([2,3,5].includes(interaction.type)&&wranglerSettings&&!configuringAccess&&!mayUseBot(wranglerSettings,interaction.member?.roles)){
+      try{await interaction.createMessage({content:"The Witness is restricted to the configured Bot Wrangler role. Ask a server manager to assign you the role or switch access to everyone.",flags:64});}catch(error){console.warn("[Access] Could not send access response.",error);}return;
+    }
     if(interaction.type===3||interaction.type===5){
       const match=/^witness:(status|note|stop|note-submit):([a-f0-9-]{36})$/i.exec(interaction.data?.custom_id??"");if(!match)return;
       try{
@@ -230,6 +238,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           "**`/note`** - Add a timestamped session note.\n" +
           "**`/recordings`** - List saved sessions.\n" +
           "**`/export`** - Download completed speaker tracks.\n\n" +
+          "**`/access`** - Choose everyone or a Bot Wrangler role (Manage Server required).\n\n" +
           "### Automation\n" +
           "**`/autojoin enable|disable|status`** - Automatically join voice.\n" +
           "**`/autorecord enable|disable|status`** - Automatically begin recording.\n\n" +
@@ -259,6 +268,17 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
 
     const settings = getSettings(guildID);
+
+    if(commandName==="access"){
+      if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to change or inspect the access policy.",flags:64});return;}
+      const options=interaction.data?.options??[],mode=options.find((option:any)=>option.name==="mode")?.value;
+      if(mode==="status"){await interaction.createMessage({content:settings.restrictAccess?`Bot controls require role <@&${settings.accessRoleID}>.`:"Bot controls are open to all server members.",flags:64,allowedMentions:{parse:[]}});return;}
+      if(!["everyone","role"].includes(mode))throw new Error("Invalid access mode.");
+      const roleID=options.find((option:any)=>option.name==="role")?.value;
+      if(mode==="role"&&(!roleID||roleID===guildID||!guild.roles.has(roleID))){await interaction.createMessage({content:"Choose an existing Bot Wrangler role; @everyone cannot be used for restricted access.",flags:64});return;}
+      await interaction.defer(64);await settingsStore.update(guildID,mode==="role"?{restrictAccess:true,accessRoleID:roleID}:{restrictAccess:false});
+      await interaction.editOriginalMessage({content:mode==="role"?`Bot commands and panel buttons now require <@&${roleID}>. Server managers can still change this policy with /access. Existing private web links remain usable; keep them private.`:"Bot commands and panel buttons are open to all server members again.",allowedMentions:{parse:[]}});return;
+    }
 
     if(commandName==="title"){
       const options=interaction.data?.options??[],text=validateTitle(options.find((option:any)=>option.name==="text")?.value),id=options.find((option:any)=>option.name==="session")?.value;
