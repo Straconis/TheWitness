@@ -1,5 +1,5 @@
 import { readFile, writeFile, rename } from "node:fs/promises";
-export interface GuildSettings { autoJoin: boolean; autoRecord: boolean }
+export interface GuildSettings { autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "original" }
 export class SettingsStore {
   private values: Record<string, GuildSettings> = {};
   private queue: Promise<void> = Promise.resolve();
@@ -10,6 +10,7 @@ export class SettingsStore {
       for (const [id, value] of Object.entries(data)) {
         const settings = value as GuildSettings;
         if (typeof settings.autoJoin !== "boolean" || typeof settings.autoRecord !== "boolean") throw new Error("Invalid saved automation settings.");
+        if(settings.downloadNaming!==undefined&&!["date","original"].includes(settings.downloadNaming))throw new Error("Invalid download naming setting.");
       }
       this.values = data;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -17,6 +18,7 @@ export class SettingsStore {
   get(id: string): GuildSettings { return { ...(this.values[id] ?? { autoJoin: false, autoRecord: false }) }; }
   update(id: string, change: Partial<GuildSettings>): Promise<void> {
     const task = this.queue.then(async () => {
+      if(change.downloadNaming!==undefined&&!["date","original"].includes(change.downloadNaming))throw new Error("Invalid download naming setting.");
       const next = { ...this.values, [id]: { ...this.get(id), ...change } };
       await writeFile(this.file + ".tmp", JSON.stringify(next,null,2));
       await rename(this.file + ".tmp",this.file);

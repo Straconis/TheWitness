@@ -1,4 +1,5 @@
 import Eris from "eris";
+import { downloadName } from "../downloads/names";
 import { deleteSession } from "../storage/delete";
 import { ExportQueue } from "../exports/jobs";
 import { recoverSession } from "../recording/salvage";
@@ -22,6 +23,7 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"downloadnames",description:"Choose recording date/time or original download filenames.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Recording date/time (UTC)",value:"date"},{name:"Original filenames",value:"original"}]}]},
       { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
       { type:1,name:"webapp",description:"Get a private browser microphone link for the current recording." },
       { type:1,name:"dashboard",description:"Open the private recording dashboard for this server." },
@@ -30,7 +32,7 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
-        { type: 3, name: "format", description: "Audio format", choices: ["ogg","wav","flac","mp3"].map(value => ({ name: value.toUpperCase(), value })) },
+        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","ogg","wav","flac","mp3"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase(), value })) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
         { type: 3, name: "upload", description: "Upload to your configured cloud account", choices:["dropbox","google","onedrive","box"].map(value=>({name:value,value})) }
@@ -235,6 +237,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
+    if(commandName==="downloadnames"){
+      const style=interaction.data?.options?.find((option:any)=>option.name==="style")?.value;
+      if(!["date","original"].includes(style))throw new Error("Invalid naming style.");
+      await interaction.defer(64);await settingsStore.update(guildID,{downloadNaming:style});
+      await interaction.editOriginalMessage({content:`Download names now use ${style==="date"?"the recording start date/time (UTC)":"original filenames"}. You can also switch styles on each download page.`});return;
+    }
     if(commandName==="delete"){
       const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="session")?.value;
       if(options.find((option:any)=>option.name==="confirm")?.value!==true){await interaction.createMessage({content:"Set confirm:true to permanently delete this session and its exports.",flags:64});return;}
@@ -293,8 +301,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       try {
         const options = interaction.data?.options ?? [];
         const id = options.find((option: any) => option.name === "session")?.value;
-        const format = (options.find((option: any) => option.name === "format")?.value ?? "ogg") as ExportFormat;
-        await getSession(config.recordingPath, id, guildID);
+        const format = (options.find((option: any) => option.name === "format")?.value ?? "audition") as ExportFormat;
+        const sourceSession=await getSession(config.recordingPath, id, guildID);
         const mix = options.find((option: any) => option.name === "mix")?.value === true;
         if(downloads&&exportQueue){
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
@@ -312,7 +320,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           return;
         }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
-        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: `witness-${id}-${format}.zip` }] });
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt},settings.downloadNaming??"date") }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")

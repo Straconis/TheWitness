@@ -88,7 +88,9 @@ export class RecordingSession {
     }
     const packet = Buffer.from(data);
     const pcm=originalPCM?Buffer.from(originalPCM):undefined;
-    const time = arrival ?? this.elapsedSamples();
+    // Craig reserves granule zero for headers; audio must begin at sample one or later.
+    const capturedTime = arrival ?? this.elapsedSamples();
+    const time = capturedTime > 0n ? capturedTime : 1n;
     this.pendingBytes += packet.length+(pcm?.length??0);
     const task = this.queue.then(async () => {
       if (this.failure) throw this.failure;

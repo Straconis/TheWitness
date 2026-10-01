@@ -1,3 +1,5 @@
+import { writeAudition } from "./audition";
+import { writeProjectZip } from "./project-zip";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -7,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type ExportFormat = "ogg" | "wav" | "flac" | "mp3";
+export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "audition";
 export interface ExportOptions { format?: ExportFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
@@ -52,7 +54,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionID)) {
     throw new Error("Invalid session ID.");
   }
-  const format = options.format ?? "ogg";
+  const requestedFormat=options.format??"ogg";
+  const format=requestedFormat==="audition"?"wav":requestedFormat;
   if (!["ogg", "wav", "flac", "mp3"].includes(format)) throw new Error("Unsupported export format.");
   const start=options.trimStart??0,end=options.trimEnd;
   if(!Number.isFinite(start)||start<0||(end!==undefined&&(!Number.isFinite(end)||end<=start)))throw new Error("Invalid trim range.");
@@ -84,8 +87,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
           const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
           const args=["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`];
           if(start>0)args.push("-ss",String(start));if(end!==undefined)args.push("-t",String(end-start));
-          await convert([...args,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
-        }else await convert(["-i",ogg,"-c:a",codecs[format],path.join(temporary,file)],ffmpegPath(options));
+          await convert([...args,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options));
+        }else await convert(["-i",ogg,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options));
       }
       manifest.push({ file, userID: track.id, username: track.username });
     }
@@ -93,7 +96,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     if (options.mix) {
       mix = `mix.${format}`;
       const inputs = metadata.tracks.flatMap((track: any) => ["-i",path.join(temporary,`track-${track.track}.ogg`)]);
-      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],path.join(temporary,mix)],ffmpegPath(options));
+      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options));
     }
     if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
@@ -104,7 +107,9 @@ export async function exportSession(root: string, sessionID: string, options: Ex
         await writeFile(path.join(temporary,notes),JSON.stringify(lines.split("\n").map(line => JSON.parse(line)),null,2));
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, format, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    if(requestedFormat==="audition")await writeAudition(temporary,manifest);
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, format:requestedFormat, project:requestedFormat==="audition"?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    if(requestedFormat==="audition")await writeProjectZip(temporary);
     await rename(temporary, target);
     return target;
   } catch (error) {

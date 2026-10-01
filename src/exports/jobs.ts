@@ -1,32 +1,40 @@
+import { writeProjectZip } from "./project-zip";
 import { existsSync } from "node:fs";
 import { transcribeExport } from "../integrations/transcription";
 import { uploadFile, CloudProvider } from "../integrations/cloud";
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile, rename } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { exportSession, ExportFormat } from "./export";
 import { getSession, sessionIDPattern } from "../storage/sessions";
 export interface ExportJob { id:string; sessionID:string; guildID:string; format:ExportFormat; mix:boolean; state:"queued"|"running"|"completed"|"failed"; createdAt:string; directory?:string; error?:string; transcribe?:boolean; upload?:CloudProvider; trimStart?:number; trimEnd?:number }
 export class ExportQueue {
- private jobs=new Map<string,ExportJob>();private worker?:Promise<void>;private stopped=false;
+ private jobs=new Map<string,ExportJob>();private worker?:Promise<void>;private stopped=false;private submissions:Promise<unknown>=Promise.resolve();
  constructor(private root:string){}
  private async save(job:ExportJob):Promise<void>{const file=path.join(this.root,"jobs",job.id+".json");await writeFile(file+".tmp",JSON.stringify(job,null,2));await rename(file+".tmp",file);}
  async load():Promise<void>{
   await mkdir(path.join(this.root,"jobs"),{recursive:true});
   for(const name of await readdir(path.join(this.root,"jobs"))){
    if(!/^[a-f0-9-]{36}\.json$/i.test(name))continue;
-   const job=JSON.parse(await readFile(path.join(this.root,"jobs",name),"utf8")) as ExportJob;
-   if(!sessionIDPattern.test(job.id)||!sessionIDPattern.test(job.sessionID)||!["ogg","wav","flac","mp3"].includes(job.format))throw new Error("Invalid export job metadata.");
-   if(job.state==="running")job.state="queued";
-   this.jobs.set(job.id,job);
+   try{
+    const job=JSON.parse(await readFile(path.join(this.root,"jobs",name),"utf8")) as ExportJob;
+    if(!job||!sessionIDPattern.test(job.id)||name!==job.id+".json"||!sessionIDPattern.test(job.sessionID)||typeof job.guildID!=="string"||typeof job.mix!=="boolean"||!["ogg","wav","flac","mp3","audition"].includes(job.format)||!["queued","running","completed","failed"].includes(job.state))throw new Error("Invalid export job metadata.");
+    if(job.state==="running")job.state="queued";
+    this.jobs.set(job.id,job);
+   }catch(error){console.warn(`[Export queue] Preserved unreadable job ${name}; skipped loading it.`,error);}
+
   }
   this.kick();
  }
- async enqueue(sessionID:string,guildID:string,format:ExportFormat,mix=false,extras:{transcribe?:boolean;upload?:CloudProvider;trimStart?:number;trimEnd?:number}={}):Promise<ExportJob>{
+ enqueue(sessionID:string,guildID:string,format:ExportFormat,mix=false,extras:{transcribe?:boolean;upload?:CloudProvider;trimStart?:number;trimEnd?:number}={}):Promise<ExportJob>{
+  const task=this.submissions.catch(()=>{}).then(()=>this.submit(sessionID,guildID,format,mix,extras));
+  this.submissions=task;return task;
+ }
+ private async submit(sessionID:string,guildID:string,format:ExportFormat,mix:boolean,extras:{transcribe?:boolean;upload?:CloudProvider;trimStart?:number;trimEnd?:number}):Promise<ExportJob>{
   if(this.stopped)throw new Error("Export service is stopping.");
   const session=await getSession(this.root,sessionID,guildID);
   if(session.state!=="completed")throw new Error("Only completed recordings can be exported.");
-  if(!["ogg","wav","flac","mp3"].includes(format))throw new Error("Invalid export format.");
+  if(!["ogg","wav","flac","mp3","audition"].includes(format))throw new Error("Invalid export format.");
   if(extras.trimStart!==undefined&&(!Number.isFinite(extras.trimStart)||extras.trimStart<0))throw new Error("Invalid trim start.");
   if(extras.trimEnd!==undefined&&(!Number.isFinite(extras.trimEnd)||extras.trimEnd<=(extras.trimStart??0)))throw new Error("Invalid trim end.");
   if(extras.transcribe&&(!process.env.TRANSCRIPTION_EXECUTABLE||!process.env.TRANSCRIPTION_MODEL))throw new Error("Configure a local transcription executable and model first.");
@@ -41,7 +49,7 @@ export class ExportQueue {
  get(id:string):ExportJob|undefined{return this.jobs.get(id);}
  private kick():void{
   if(this.worker||this.stopped)return;
-  this.worker=this.run().catch(error=>console.error("[Export queue]",error)).finally(()=>{this.worker=undefined;if(!this.stopped&&[...this.jobs.values()].some(job=>job.state==="queued"))this.kick();});
+  this.worker=this.run().catch(error=>{this.stopped=true;console.error("[Export queue] Storage failed; processing paused until restart.",error);}).finally(()=>{this.worker=undefined;if(!this.stopped&&[...this.jobs.values()].some(job=>job.state==="queued"))this.kick();});
  }
  private async run():Promise<void>{
   while(!this.stopped){
@@ -50,8 +58,9 @@ export class ExportQueue {
    try{
     const directory=await exportSession(this.root,job.sessionID,{format:job.format,mix:job.mix,trimStart:job.trimStart,trimEnd:job.trimEnd});job.directory=path.basename(directory);
     if(job.transcribe)await transcribeExport(directory,{executable:process.env.TRANSCRIPTION_EXECUTABLE!,model:process.env.TRANSCRIPTION_MODEL!,ffmpeg:process.env.FFMPEG_PATH?.trim()||(existsSync(path.resolve(__dirname,"../../bin/ffmpeg"))?path.resolve(__dirname,"../../bin/ffmpeg"):"ffmpeg")});
+    if(job.transcribe&&job.format==="audition"){await rm(path.join(directory,"project.zip"));await writeProjectZip(directory);}
     if(job.upload)for(const filename of await readdir(directory)){
-      if(!/^(track-\d+|mix|manifest|notes|transcript)\.(ogg|wav|flac|mp3|json|txt|srt|vtt)$/.test(filename))continue;
+      if(!/^(track-\d+|mix|manifest|notes|transcript|session|project)\.(ogg|wav|flac|mp3|json|txt|srt|vtt|sesx|zip)$/.test(filename))continue;
       const prefix=job.upload.toUpperCase();await uploadFile(job.upload,path.join(directory,filename),{token:process.env[`${prefix}_ACCESS_TOKEN`]!,folder:process.env[`${prefix}_FOLDER`],name:`witness-${job.id}-${filename}`});
     }
     job.state="completed";
@@ -60,5 +69,5 @@ export class ExportQueue {
    await this.save(job);
   }
  }
- async close():Promise<void>{this.stopped=true;await this.worker;}
+ async close():Promise<void>{this.stopped=true;await this.submissions.catch(()=>{});await this.worker;}
 }

@@ -35,3 +35,13 @@ host networking, or cloud-account credentials.
 Optional transcription requires whisper.cpp and a downloaded speech model.
 Optional cloud upload currently uses owner-provided access tokens; OAuth login
 and automatic refresh are not implemented. These integrations are experimental.
+
+Run `node scripts/test-endurance.cjs 10` after compiling for an accelerated
+ten-minute, four-speaker disk recording check and decoded final excerpt.
+This uses generated tone and synthetic timestamps. It is separate from
+wall-clock endurance, real network conditions and live microphone testing.
+
+Reliability checks also cover cancelling a queued reconnect during stop/shutdown,
+concurrent duplicate exports, and restart with interrupted/corrupted export jobs.
+Unreadable job files are preserved and skipped so one bad job does not prevent
+the rest of the queue from starting.

@@ -24,7 +24,7 @@ additional notices when adapting other components or bundled dependencies.
 | Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
 | Notes and recording management | bot/commands | Server-scoped listing, notes and exports | Richer info, deletion and access-policy refinement |
 | Browser recording | recorder/webapp.ts | Signed links, microphone client, WebSocket PCM, lossless WAV/FLAC source | Real microphone and reconnect testing |
-| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue implemented; further format parity remains |
+| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue implemented; Audition SESX/ZIP64 added; additional Craig formats remain |
 | Download interface | apps/ferret | Signed export pages and streamed speaker tracks | Format selection before export, job status, deletion and host routing |
 | Dashboard | apps/dashboard | Signed server-scoped sessions/settings/export/recovery page | OAuth and richer server controls |
 | Browser editing/streaming | apps/ennuizel-streamer | Audio preview, streaming and clipped export requests | Full multitrack Ennuizel editor |

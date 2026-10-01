@@ -34,16 +34,17 @@ export class RecordingManager {
   const onError=(error:Error)=>console.error(`[Voice ${session.id}]`,error);
   const onDisconnect=(error?:Error)=>{
    if(this.reconnecting.has(guild.id)||this.shuttingDown)return;
+   const controller=new AbortController();this.reconnecting.set(guild.id,controller);
+   session.voiceState="reconnecting";
    this.cleanup.get(guild.id)?.();this.cleanup.delete(guild.id);
-   void this.exclusive(guild.id,async()=>{if(connector)await this.reconnect(guild,session,connector,error);else await this.stop(guild.id,error??new Error("Voice connection disconnected."));}).catch(error=>console.error("[Voice]",error));
+   void this.exclusive(guild.id,async()=>{if(connector)await this.reconnect(guild,session,connector,controller,error);else {this.reconnecting.delete(guild.id);await this.stop(guild.id,error??new Error("Voice connection disconnected."));}}).catch(error=>console.error("[Voice]",error));
   };
   receiver.on("data",onData);receiver.on("error",fail);connection.on("error",onError);connection.on("disconnect",onDisconnect);
   session.voiceState="connected";
   this.cleanup.set(guild.id,()=>{clearInterval(timer);receiver.removeListener("data",onData);receiver.removeListener("error",fail);connection.removeListener("error",onError);connection.removeListener("disconnect",onDisconnect);});
  }
- private async reconnect(guild:Eris.Guild,session:RecordingSession,connector:Connector,cause?:Error):Promise<void>{
-  if(this.sessions.get(guild.id)!==session)return;
-  const controller=new AbortController();this.reconnecting.set(guild.id,controller);session.voiceState="reconnecting";
+ private async reconnect(guild:Eris.Guild,session:RecordingSession,connector:Connector,controller:AbortController,cause?:Error):Promise<void>{
+  if(this.sessions.get(guild.id)!==session||controller.signal.aborted||this.shuttingDown){this.reconnecting.delete(guild.id);return;}
   let failure=cause??new Error("Voice connection lost.");
   try{
    for(const wait of this.retryDelays){

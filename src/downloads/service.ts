@@ -1,3 +1,4 @@
+import { downloadName, DownloadNaming } from "./names";
 import { WebSocketServer } from "ws";
 import { OpusEncoder } from "@discordjs/opus";
 import { browserPage } from "./browser-page";
@@ -18,7 +19,7 @@ import path from "node:path";
 import { sessionIDPattern } from "../storage/sessions";
 
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
-const filePattern = /^(manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3)|track-\d+\.(ogg|wav|flac|mp3))$/;
+const filePattern = /^(manifest\.json|notes\.json|session\.sesx|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3)|track-\d+\.(ogg|wav|flac|mp3))$/;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
 
 export class DownloadService {
@@ -57,7 +58,8 @@ export class DownloadService {
     try{
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
-        await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord});return this.json(response,200,{saved:true});
+        if(data.downloadNaming!==undefined&&!["date","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
+        await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {})});return this.json(response,200,{saved:true});
       }
       if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true);return this.json(response,202,{url:this.jobLink(job.id)});}
       if(data.action==="recover"){const id=await this.manager.exclusive(guildID,()=>recoverSession(this.root,data.session,guildID));return this.json(response,200,{id});}
@@ -128,6 +130,9 @@ export class DownloadService {
     if(manifest.transcripts && (!Array.isArray(manifest.transcripts)||!manifest.transcripts.every((file:unknown)=>typeof file==="string"&&/^transcript\.(txt|srt|vtt)$/.test(file))))throw new Error("Invalid transcript files.");
     if (manifest.mix && !/^mix\.(ogg|wav|flac|mp3)$/.test(manifest.mix)) throw new Error("Invalid mixed file.");
     if (manifest.notes && manifest.notes !== "notes.json") throw new Error("Invalid notes file.");
+    if(manifest.project&&manifest.project!=="project.zip")throw new Error("Invalid project file.");
+    const requestedNaming=url.searchParams.get("names");
+    const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
     const filename = parts[4];
     if(request.method==="POST"){
       if(filename||!this.queue)return this.error(response,405,"Method not allowed.");
@@ -146,12 +151,16 @@ export class DownloadService {
     }
 
     if (!filename) {
-      const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${escapeHTML(url.search)}">${escapeHTML(track.username)}</a><br><audio controls preload="none" src="${route}/${track.file}${escapeHTML(url.search)}&amp;preview=1"></audio></li>`).join("");
-      const extras = [[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${escapeHTML(url.search)}">${label}</a></li>`).join("");
-      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>The Witness</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p><ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["ogg","wav","flac","mp3"].map(value=>`<option>${value}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
+      const downloadSearch=new URLSearchParams(url.searchParams);downloadSearch.set("names",naming);
+      const query="?"+escapeHTML(downloadSearch.toString());
+      const toggle=new URLSearchParams(downloadSearch);toggle.set("names",naming==="date"?"original":"date");
+      const namesToggle=`<p>Download names: ${naming==="date"?"recording date/time (UTC)":"original filenames"}. <a href="${route}?${escapeHTML(toggle.toString())}">Switch to ${naming==="date"?"original filenames":"date/time names"}</a></p>`;
+      const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="none" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
+      const extras = [[manifest.project,"Download Audition project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>The Witness</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","ogg","wav","flac","mp3"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
       this.html(response,html); return;
     }
-    if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");
+    if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && filename !== manifest.project && filename !== "session.sesx" && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename))) return this.error(response,404,"Not found.");
     const file = await open(path.join(directory,filename),constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const info = await file.stat();
@@ -168,7 +177,7 @@ export class DownloadService {
       }
       response.setHeader("Accept-Ranges","bytes");
       response.setHeader("Content-Length",String(Math.max(0,end-start+1)));
-      response.setHeader("Content-Disposition",`${url.searchParams.get("preview")==="1"?"inline":"attachment"}; filename="${filename}"`);
+      response.setHeader("Content-Disposition",`${url.searchParams.get("preview")==="1"?"inline":"attachment"}; filename="${downloadName(filename,manifest,naming)}"`);
       response.writeHead(status,{ "Content-Type": ({ogg:"audio/ogg",wav:"audio/wav",flac:"audio/flac",mp3:"audio/mpeg"} as Record<string,string>)[filename.split(".").pop()!]??"application/octet-stream" });
       if (request.method === "HEAD" || !info.size) { response.end(); return; }
       await pipeline(createReadStream("",{ fd: file.fd, autoClose:false, start,end }),response);
