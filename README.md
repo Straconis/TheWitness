@@ -31,8 +31,23 @@ finalizes it, and `/status` reports saved packet and track counts. Automatic
 recording uses the same engine. Interrupted sessions are marked on startup and
 raw audio is preserved. All recording feature flags are enabled without tiers.
 
-Run `npm test` to build and check the recorder. Live Discord recording, exports,
-and the web interfaces have not been verified or completed yet.
+Run `npm test` to build and check the recorder. Craig timestamp correction and per-speaker Ogg exports are tested with generated
+audio. Live Discord recording and the web interfaces remain unfinished.
 
 See [the package comparison and implementation sequence](docs/CRAIG-PARITY.md).
 Craig attribution is preserved in [licenses/Craig-ISC.txt](licenses/Craig-ISC.txt).
+
+## Audio exports
+
+Build the app with `npm run build`, then build Craig's timestamp correction tool
+with `npm run build:cook` (requires a C compiler on Linux). Export a completed
+session with `npm run export -- <session UUID> ogg`. The result is a directory
+inside that session containing numbered speaker files and a manifest mapping
+filenames to participants. This does not require a Discord token.
+
+Replace `ogg` with `wav`, `flac`, or `mp3` to convert through FFmpeg. FFmpeg must
+be installed on the host or configured through `FFMPEG_PATH`; those conversions
+have not yet been verified here. Formats have no payment or tier checks.
+Exports are streamed from disk and processed one track at a time. An interrupted
+or failed recording cannot be exported until its recovery has been validated.
+The download interface and Discord export delivery are still to be implemented.

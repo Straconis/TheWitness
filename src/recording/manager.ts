@@ -26,7 +26,12 @@ export class RecordingManager {
       return existing;
     }
     const session = await RecordingSession.create(this.root, guild.id, channelID);
-    const receiver = connection.receive("opus");
+    let receiver: ReturnType<Eris.VoiceConnection["receive"]>;
+    try { receiver = connection.receive("opus"); }
+    catch (error) {
+      await session.close(error instanceof Error ? error : new Error(String(error))).catch(() => {});
+      throw error;
+    }
     const onData = (data: Buffer, userID: string, timestamp: number) => {
       if (!userID) return;
       void session.append(data, userID, guild.members.get(userID)?.username ?? userID, timestamp).catch(error => {

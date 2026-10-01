@@ -24,7 +24,7 @@ additional notices when adapting other components or bundled dependencies.
 | Automation | bot/modules/autorecord.ts | In-memory toggles; auto-record starts the engine | Persistent settings and scheduling/channel rules |
 | Notes and recording management | bot/commands | None | Notes, list/info, access checks, deletion |
 | Browser recording | recorder/webapp.ts | None | Browser client, authorization, WebSocket transport, FLAC and continuous modes |
-| Exports | apps/kitchen and cook helpers | None | Timestamp correction, per-user and mixed formats, archive generation, durable job queue |
+| Exports | apps/kitchen and cook helpers | Craig correction and per-speaker Ogg; optional FFmpeg conversion | Verify converted formats, mixed audio, archives and durable job queue |
 | Download interface | apps/ferret | None | Private download links, format selection, export status and deletion |
 | Dashboard | apps/dashboard | None | Recording/settings management and authorization |
 | Browser editing/streaming | apps/ennuizel-streamer | None | Editor delivery and recording streaming |
@@ -58,12 +58,13 @@ by a future continuation-page implementation, not silently truncated.
 
 ## Current verification
 
-TypeScript build and fourteen automated checks pass on Linux. Tests cover Ogg
+TypeScript build and fifteen automated checks pass on Linux. Tests cover Ogg
 checksums/lacing, speaker separation, paired timestamps, concurrent starts,
-finalization, failure states and interrupted-session preservation. Craig's
+finalization, failure states, interrupted-session preservation, and real Opus
+encoding/correction/decoding through per-speaker exports. Craig's
 original `oggtracks` C helper recognizes both tracks in a generated Witness
 fixture. The live Discord connection, audio decoding, timestamp correction,
-exports, browser interfaces and hosting deployment remain unverified.
+FFmpeg conversions, browser interfaces and hosting deployment remain unverified.
 
 Recordings are stored at `<RECORDING_PATH>/<session UUID>/audio.ogg.*`, with
 Witness lifecycle metadata in `session.json`. The `.info` file contains basic
