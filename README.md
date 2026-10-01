@@ -56,9 +56,8 @@ Exports are streamed from disk and processed one track at a time. An interrupted
 or failed recording cannot be exported until its recovery has been validated.
 Use `/recordings` to list recent server sessions and `/export session:<UUID>
 format:<format>` to request a private ZIP attachment. Attachment delivery currently
-uses an 8 MiB budget; larger exports stay saved on the host until the web download
-interface is implemented. One export runs at a time. These Discord interactions
-still need a live bot test. Automation settings persist in `settings.json` inside
+uses an 8 MiB budget; larger exports stay saved on the host when the download service is disabled. One export runs at a time. With the download service enabled, `/export` returns a private web link instead
+of an attachment. These Discord interactions still need a live bot test. Automation settings persist in `settings.json` inside
 the recording directory; disabling auto-join also disables auto-record.
 
 ## License
@@ -72,3 +71,23 @@ FFmpeg test binary is GPL-3.0-or-later and is not tracked in this repository.
 Any deployment package that includes FFmpeg must preserve its notices and
 provide the corresponding source and build information as its license requires.
 The Witness's ISC license does not replace those third-party terms.
+
+## Private download service
+
+Set `DOWNLOAD_PORT` to the port allocated by your host and
+`DOWNLOAD_PUBLIC_URL` to the public origin (for example,
+`https://downloads.example.com`, with no path). Leave the port unset to keep
+web downloads disabled. The server runs in the same Node process as the bot;
+no additional framework or service is required. Public HTTPS must be provided
+by the hosting platform or its reverse proxy; this Node listener uses HTTP.
+
+When enabled, `/export` returns a signed link valid for 24 hours. The download
+page lists participant tracks and streams each file, including ranged/resumed
+requests, without buffering an entire recording. Anyone holding the link can
+access that export, so links are sent privately in Discord. They are scoped to
+one export, not to every recording in the server.
+
+The signing key is generated in `<RECORDING_PATH>/download-key`. Keep the
+recording directory persistent across host restarts; removing or replacing this
+key invalidates old links. Host port routing and public HTTPS have not been
+verified on bot-hosting.net yet.

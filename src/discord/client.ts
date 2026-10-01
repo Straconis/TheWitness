@@ -1,4 +1,5 @@
 import Eris from "eris";
+import type { DownloadService } from "../downloads/service";
 import path from "node:path";
 import { SettingsStore } from "../storage/settings";
 import { getSession, listSessions } from "../storage/sessions";
@@ -121,7 +122,7 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
   return true;
 }
 
-export function createDiscordClient(): Eris.Client {
+export function createDiscordClient(downloads?: DownloadService): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
     gateway: { intents: ["guilds", "guildVoiceStates"] }
   });
@@ -248,12 +249,17 @@ export function createDiscordClient(): Eris.Client {
         const format = (options.find((option: any) => option.name === "format")?.value ?? "ogg") as ExportFormat;
         await getSession(config.recordingPath, id, guildID);
         const directory = await exportSession(config.recordingPath, id, { format });
+        if (downloads) {
+          const link = downloads.link(id, path.basename(directory));
+          await interaction.editOriginalMessage({ content: `Your speaker tracks are ready.\n[Open private downloads](${link})\nThis link expires in 24 hours. Share it only with your group.` });
+          return;
+        }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
         await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: `witness-${id}-${format}.zip` }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
-          ? "This export is too large to attach in Discord. It is saved on the host; large-file downloads are still being implemented."
+          ? "This export is too large to attach in Discord. It is saved on the host; enable the download service to retrieve large recordings."
           : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues." });
       } finally { exportJobs.delete(guildID); }
       return;

@@ -1,3 +1,4 @@
+import { DownloadService } from "./downloads/service";
 import { mkdir } from "node:fs/promises";
 
 import { markInterruptedSessions } from "./recording/recovery";
@@ -19,7 +20,10 @@ async function main(): Promise<void> {
 
   console.log(`[Storage] Recordings: ${config.recordingPath}`);
 
-  const client = createDiscordClient();
+  const downloads = config.downloadPort
+    ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
+  if (downloads) await downloads.listen(config.downloadPort!);
+  const client = createDiscordClient(downloads);
 
   let shuttingDown = false;
   const shutdown = async () => {
@@ -27,13 +31,14 @@ async function main(): Promise<void> {
     shuttingDown = true;
     try { await recordings.shutdown(); }
     catch (error) { console.error("[Shutdown]", error); process.exitCode = 1; }
-    finally { client.disconnect({ reconnect: false }); }
+    finally { client.disconnect({ reconnect: false }); await downloads?.close(); }
   };
   process.once("SIGINT", () => { void shutdown(); });
   process.once("SIGTERM", () => { void shutdown(); });
 
   console.log("[Discord] Connecting...");
-  await client.connect();
+  try { await client.connect(); }
+  catch (error) { await shutdown(); throw error; }
 }
 
 main().catch((error) => {
