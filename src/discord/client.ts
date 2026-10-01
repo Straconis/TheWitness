@@ -1,4 +1,5 @@
 import Eris from "eris";
+import { EventRecording } from "./event-recording";
 import { mayUseBot } from "./access";
 import { RecordingPanels,panelBody } from "./panel";
 import { StorageMonitor } from "../storage/space";
@@ -30,6 +31,8 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"exportjob",description:"Inspect, cancel or retry an export job.",options:[{type:3,name:"action",description:"Job action",required:true,choices:[{name:"Status",value:"status"},{name:"Cancel",value:"cancel"},{name:"Retry",value:"retry"}]},{type:3,name:"job",description:"Export job ID",required:true}]},
+      {type:1,name:"eventrecord",description:"Opt into recording a selected Discord voice event.",options:[{type:3,name:"mode",description:"Event recording rule",required:true,choices:[{name:"Enable",value:"enable"},{name:"Disable",value:"disable"},{name:"Show rules",value:"status"}]},{type:3,name:"event",description:"Discord event ID or event link"},{type:5,name:"stop_on_end",description:"Also stop this event's recording when the event ends (default off)"}]},
       {type:1,name:"access",description:"Manage who may use The Witness (Manage Server required).",options:[{type:3,name:"mode",description:"Access policy",required:true,choices:[{name:"Everyone",value:"everyone"},{name:"Bot Wrangler role",value:"role"},{name:"Show current policy",value:"status"}]},{type:8,name:"role",description:"Role allowed to control the bot (required for role mode)"}]},
       {type:1,name:"title",description:"Name the active recording or a saved session.",options:[{type:3,name:"text",description:"Recording title",required:true,max_length:120},{type:3,name:"session",description:"Saved session ID (omit for the active recording)"}]},
       {type:1,name:"downloadnames",description:"Choose recording date/time or original download filenames.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Recording date/time (UTC)",value:"date"},{name:"Original filenames",value:"original"}]}]},
@@ -147,10 +150,19 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
 
 export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
-    gateway: { intents: ["guilds", "guildVoiceStates"] }
+    gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
   const panels=new RecordingPanels(client,storageMonitor);recordingPanels=panels;
+
+  const events=new EventRecording(settingsStore,recordings,async event=>{
+    const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new Error("Event voice channel unavailable.");
+    const connection=await joinVoiceChannel(client,guild,event.channelID);
+    const session=await recordings.start(guild,event.channelID,connection,()=>client.joinVoiceChannel(event.channelID!,{opusOnly:true,selfDeaf:false}));
+    await session.setTitle(event.name.replace(/[\x00-\x1f\x7f]/g," ").trim().slice(0,120)||"Discord event");
+    await panels.ensure(event.channelID,session).catch(error=>console.warn("[Event panel]",error));return session.id;
+  },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});
+  client.on("guildScheduledEventUpdate",event=>{void events.update({id:event.id,guildID:event.guild.id,channelID:(event as unknown as {channel?:{id:string}}).channel?.id??null,entityType:event.entityType,status:event.status,name:event.name}).catch(error=>console.error("[Event recording]",error));});
 
   client.on("ready", async () => {
     console.log(
@@ -269,6 +281,25 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
+    if(commandName==="exportjob"){
+      if(!exportQueue)throw new Error("Export queue unavailable.");const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="job")?.value,action=options.find((option:any)=>option.name==="action")?.value;
+      const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new Error("Export job not found in this server.");await interaction.defer(64);
+      if(action==="cancel"){await exportQueue.cancel(id,guildID);await interaction.editOriginalMessage({content:"Cancellation requested. Your original recording is preserved. Files already uploaded to a cloud account are not deleted."});return;}
+      if(action==="retry"){const next=await exportQueue.retry(id,guildID);await interaction.editOriginalMessage({content:`Retry queued: ${next.id}${downloads?"\n"+downloads.jobLink(next.id):""}`});return;}
+      await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${job.stage??"Waiting"}`});return;
+    }
+    if(commandName==="eventrecord"){
+      if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to configure event recording.",flags:64});return;}
+      const options=interaction.data?.options??[],mode=options.find((option:any)=>option.name==="mode")?.value,rules=settings.eventRecordings??[];
+      await interaction.defer(64);
+      if(mode==="status"){await interaction.editOriginalMessage({content:rules.length?rules.map(rule=>`Event ${rule.eventID} — auto-stop ${rule.stopOnEnd?"on":"off"}`).join("\n"):"Event-triggered recording is off. No events are selected."});return;}
+      const value=String(options.find((option:any)=>option.name==="event")?.value??""),match=/^(?:https:\/\/discord\.com\/events\/(\d+)\/)?(\d{1,25})$/.exec(value);
+      if(!match||(match[1]&&match[1]!==guildID)||!["enable","disable"].includes(mode))throw new Error("Choose an event ID or event link from this server.");
+      const eventID=match[2]!;
+      if(mode==="enable"){const event=(await client.getGuildScheduledEvents(guildID)).find(event=>event.id===eventID);if(!event||event.entityType!==2||!(event as unknown as {channel?:{id:string}}).channel||event.status!==1)throw new Error("Select a scheduled voice-channel event that has not started yet.");}
+      const next=rules.filter(rule=>rule.eventID!==eventID);if(mode==="enable")next.push({eventID,stopOnEnd:options.find((option:any)=>option.name==="stop_on_end")?.value===true});
+      await settingsStore.update(guildID,{eventRecordings:next});await interaction.editOriginalMessage({content:mode==="enable"?"Event recording enabled for that event. Recording starts when Discord marks it active; auto-stop is optional and defaults off.":"Event recording disabled for that event."});return;
+    }
     if(commandName==="access"){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to change or inspect the access policy.",flags:64});return;}
       const options=interaction.data?.options??[],mode=options.find((option:any)=>option.name==="mode")?.value;
@@ -356,7 +387,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
           const upload=options.find((option:any)=>option.name==="upload")?.value;
           const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload});
-          await interaction.editOriginalMessage({content:`Your export is queued.\n[Open export status](${downloads.jobLink(job.id)})`});return;
+          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}\n[Open export status](${downloads.jobLink(job.id)})`});return;
         }
         if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
           await interaction.editOriginalMessage({content:"Enable the download service to use queued transcription or cloud uploads."});return;

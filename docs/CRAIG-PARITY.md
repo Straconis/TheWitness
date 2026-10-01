@@ -1,103 +1,33 @@
-# The Witness: Craig package adaptation
+# The Witness: current Craig adaptation
 
-## Product direction
+The target is a private, no-paywall recording package for the owner and friends.
+This release implements the core recording and export workflow; it is not full
+Craig feature parity. No subscription, SKU, supporter tier or server blessing
+is required. Optional integrations and automation are opt-in.
 
-The Witness is a private deployment for the owner and friends on bot-hosting.net.
-The target is Craig's whole recording package, with all features available without
-subscriptions, SKUs, supporter tiers, or server blessings. Real storage and host
-resource constraints still apply. The host's actual available services have not
-been verified; do not assume Docker, PostgreSQL, Redis, FFmpeg, or multiple public
-ports are available.
+Craig reference: https://github.com/CraigChat/craig, commit `60d1a00`, in the
+ignored `reference/` checkout. Its ISC notice is preserved in
+`licenses/Craig-ISC.txt`. Bundled audio dependencies retain their own notices.
 
-Reference: https://github.com/CraigChat/craig, local checkout in `reference/`,
-commit `60d1a00`. Keep the reference checkout unchanged and excluded from Git.
-Craig's root ISC notice is preserved in `licenses/Craig-ISC.txt`; preserve any
-additional notices when adapting other components or bundled dependencies.
+| Area | Implemented locally | Remaining verification or development |
+| --- | --- | --- |
+| Recording | Separate speaker Opus tracks, bounded jitter handling, reconnects, graceful stop | Live Discord and encryption behavior |
+| Recovery | CRC-checked salvage into a new session; originals preserved | Real interrupted group session |
+| Discord controls | Compact panel, shared notes, titles, optional Bot Wrangler gate | Live permissions, buttons and gateway events |
+| Automation | Persistent autojoin settings; selected voice events; separate opt-in event auto-stop | Live event transitions; advanced recurring schedules/channel rules |
+| Exports | Ogg, WAV, FLAC, MP3, mixed audio, excerpts, Audition SESX with markers and ZIP64 | Open project and markers in Audition; additional Craig formats |
+| Export jobs | Persistent queue, progress, cancel, retry, restart recovery | Hosting restart behavior |
+| Browser capture | Signed microphone client, WebSocket audio, original PCM exports | Real browser microphone and public HTTPS |
+| Web tools | Signed downloads, ranges, preview/crop, dashboard, settings, recovery and deletion | Full Ennuizel multitrack editor; Discord OAuth authentication |
+| Integrations | Optional owner-token cloud adapters and local whisper.cpp execution | Real cloud accounts/model; OAuth connection and automatic token refresh |
+| Operations | Disk warnings, bundled audio tools, offline host checker | Host native-library compatibility, quota and port routing |
+| Persistence | Atomic disk-backed settings and jobs | Multiple workers and retention automation |
 
-## Comparison
+The build and 57 automated checks pass on Linux. Tests exercise generated audio,
+real local codecs and files, simulated Discord connections, HTTP/WebSocket
+transport, and local cloud/recognizer fixtures. They do not prove live Discord,
+real transcription accuracy, cloud authorization, Adobe compatibility or
+bot-hosting.net deployment. See `LOCAL-TESTING.md` for the handoff checks.
 
-| Component | Craig source | The Witness today | Remaining work |
-| --- | --- | --- | --- |
-| Discord bot | apps/bot | Commands and voice joining | Typed interactions, command acknowledgement, live connection tests |
-| Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Automatic reconnect implemented; live end-to-end validation remains |
-| Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Recovery into a new exportable session implemented and locally tested |
-| Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
-| Notes and recording management | bot/commands | Server-scoped listing, notes and exports | Richer info, deletion and access-policy refinement |
-| Browser recording | recorder/webapp.ts | Signed links, microphone client, WebSocket PCM, lossless WAV/FLAC source | Real microphone and reconnect testing |
-| Exports | apps/kitchen and cook helpers | Craig correction and tested per-speaker Ogg/WAV/FLAC/MP3 | Durable job queue implemented; Audition SESX/ZIP64 added; additional Craig formats remain |
-| Download interface | apps/ferret | Signed export pages and streamed speaker tracks | Format selection before export, job status, deletion and host routing |
-| Dashboard | apps/dashboard | Signed server-scoped sessions/settings/export/recovery page | OAuth and richer server controls |
-| Browser editing/streaming | apps/ennuizel-streamer | Audio preview, streaming and clipped export requests | Full multitrack Ennuizel editor |
-| Background jobs | apps/tasks | Persistent export queue, optional cloud/transcription adapters | Retention, cleanup, live integration checks |
-| Persistence and coordination | packages/db, Redis integrations | Atomic disk-backed settings and export jobs | Multiple processes/workers |
-| Operations | apps/botctl and deployment files | Console logging | Health/status, deployment configuration, restart behavior |
-| Feature access | bot/config.ts, util.ts, entitlements.ts; consumers elsewhere | Always-enabled recording metadata policy | Apply the policy across bot, browser and export interfaces |
-
-## Implementation sequence
-
-1. Adapt recorder primitives with format tests. CRC and Ogg page encoding are
-   now implemented, including segment-boundary tests and 64-bit granule positions.
-2. Build the session writer around Craig's `.header1`, `.header2`, `.data`,
-   `.users`, and metadata conventions, preserving timestamp packets needed by
-   Craig's correction/export tools. Check compatibility with the cook helpers.
-3. Connect voice reception to sessions and make `/record`, `/stop`, and `/status`
-   reflect actual recording state. Handle concurrent starts and storage failures.
-4. Add graceful finalization, reconnect behavior, interrupted-session recovery,
-   persistent automation settings, notes and recording management.
-5. Adapt export workers and download UI together, using real fixtures to verify
-   synchronization and each supported format.
-6. Adapt browser recording, editor/streaming and dashboard, with one consistent
-   always-enabled feature policy instead of scattered tier bypasses.
-7. Package the full deployment for verified bot-hosting.net capabilities; validate
-   restart persistence, public download access and an end-to-end group session.
-
-The current encoder returns a page buffer rather than owning a stream. The future
-session writer must handle backpressure and propagate disk errors. A single packet
-is limited to 65024 bytes by this one-page encoder; larger packets must be split
-by a future continuation-page implementation, not silently truncated.
-
-## Current verification
-
-TypeScript build and twenty-five automated checks pass on Linux. Tests cover Ogg
-checksums/lacing, speaker separation, paired timestamps, concurrent starts,
-finalization, failure states, interrupted-session preservation, and real Opus
-encoding/correction/decoding through per-speaker exports. Craig's
-original `oggtracks` C helper recognizes both tracks in a generated Witness
-fixture. The live Discord connection, audio decoding, timestamp correction,
-browser recording/editor interfaces and hosting deployment remain unverified.
-The basic download service passes HTTP tests for valid/expired/tampered links,
-range requests, restart persistence and file-access boundaries. WAV, FLAC and MP3
-conversion and decoding have also passed with a locally installed FFmpeg.
-
-Recordings are stored at `<RECORDING_PATH>/<session UUID>/audio.ogg.*`, with
-Witness lifecycle metadata in `session.json`. The `.info` file contains basic
-Craig-format identifiers and all feature flags, but is not yet a complete
-replacement for Craig's download authorization/recording database. Voice packets are now reordered in a bounded per-speaker window with original
-arrival times retained; automatic reconnection remains to be adapted. Settings now persist across restarts. Discord ZIP delivery uses an 8 MiB budget;
-large exports can use the optional signed-link download service. Command delivery remains
-unverified against a live Discord server.
-
-Notes now preserve Craig's `STREAMNOTE` / `NOTE` convention on track 65536 and
-export as JSON. Optional mixed exports combine corrected Opus originals through
-FFmpeg before encoding the requested format. Local tests identify two distinct
-speaker tones in the mixed waveform and verify notes/mix delivery through ZIP
-and signed download paths. Packet jitter handling now uses a 16-packet reorder window, with a 200 ms aged
-flush, timestamp rollover handling, duplicate/late detection, and shutdown drain.
-Tests cover the reorder buffer and its integration with on-disk timestamp pages.
-Automatic reconnection and recovery-to-export of interrupted recordings remain
-unfinished.
-
-## Hosting candidate sweep
-
-Added automatic voice retries, checksummed recovery, persistent export jobs,
-signed browser capture and dashboard pages, deletion, preview/crop exports,
-original browser PCM for WAV/FLAC, subtitle formatting, and optional transcription
-and cloud upload adapters. Source-pinned portable FFmpeg/correction tools are
-built locally. Native Node modules still need hosting-image compatibility checks.
-
-The full Craig package is not yet complete. Full Ennuizel editing, scheduled
-channel rules, retention automation, OAuth connections/refresh, and additional
-export types remain. Transcription execution, cloud account uploads, real browser
-microphones, Discord sessions and public host routing need live verification.
-The earlier verification notes describe incremental milestones; the current
-local checks and deployment limits are documented in `LOCAL-TESTING.md`.
+An accelerated ten-minute, four-speaker recording test also passed with 120,000
+packets and a decoded final excerpt. This is not a wall-clock network test.

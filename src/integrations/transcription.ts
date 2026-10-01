@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { runTool } from "../exports/process";
 import { once } from "node:events";
 import { readFile,writeFile,rm } from "node:fs/promises";
 import path from "node:path";
@@ -15,19 +15,14 @@ export function formatTranscript(segments:TranscriptSegment[],format:"txt"|"srt"
   return `${index+1}\n${timestamp(segment.start,format==="srt"?",":".")} --> ${timestamp(segment.end,format==="srt"?",":".")}\n${text}\n`;
  }).join("\n");
 }
-async function run(executable:string,args:string[]):Promise<void>{
- const child=spawn(executable,args,{stdio:["ignore","ignore","pipe"]});let stderr="";
- child.stderr.on("data",chunk=>{stderr=(stderr+chunk).slice(-4096);});const [code]=await once(child,"close");
- if(code!==0)throw new Error(`Transcription process failed (${code}): ${stderr}`);
-}
 /** Local whisper.cpp; no subscription checks or hosted-service dependency. */
-export async function transcribeExport(directory:string,options:{executable:string;model:string;ffmpeg:string}):Promise<void>{
+export async function transcribeExport(directory:string,options:{executable:string;model:string;ffmpeg:string;signal?:AbortSignal;timeoutMs?:number}):Promise<void>{
  const manifest=JSON.parse(await readFile(path.join(directory,"manifest.json"),"utf8"));const segments:TranscriptSegment[]=[];
  for(const track of manifest.tracks){
   const input=path.join(directory,track.file),temporary=path.join(directory,"transcription-input.wav"),output=path.join(directory,"transcription-result");
   try{
-   await run(options.ffmpeg,["-nostdin","-v","error","-n","-i",input,"-ar","16000","-ac","1",temporary]);
-   await run(options.executable,["-m",options.model,"-f",temporary,"-oj","-of",output]);
+   await runTool(options.ffmpeg,["-nostdin","-v","error","-n","-i",input,"-ar","16000","-ac","1",temporary],options.signal,options.timeoutMs);
+   await runTool(options.executable,["-m",options.model,"-f",temporary,"-oj","-of",output],options.signal,options.timeoutMs);
    const result=JSON.parse(await readFile(output+".json","utf8"));
    if(!Array.isArray(result.transcription))throw new Error("Invalid whisper.cpp output.");
    for(const item of result.transcription){

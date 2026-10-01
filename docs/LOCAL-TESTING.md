@@ -45,3 +45,15 @@ Reliability checks also cover cancelling a queued reconnect during stop/shutdown
 concurrent duplicate exports, and restart with interrupted/corrupted export jobs.
 Unreadable job files are preserved and skipped so one bad job does not prevent
 the rest of the queue from starting.
+
+The current build passes 57 automated checks. New coverage exercises selected
+event opt-in and ownership, export cancellation and retry, tool timeouts,
+cloud request bodies and safe failure messages, and transcription conversion
+and temporary-file cleanup. Cloud and recognizer fixtures run locally; no real
+account or speech model was used.
+
+During live testing, also select one scheduled voice event and confirm recording
+starts on activation. Confirm event auto-stop is off by default, then enable it
+and test completion. Verify manual stop stays stopped and another manual
+recording is not stopped by an older event ending. Cancel and retry an export
+from both Discord and its signed job page.

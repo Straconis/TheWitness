@@ -1,3 +1,4 @@
+import { runTool } from "./process";
 import { writeAudition } from "./audition";
 import { writeProjectZip } from "./project-zip";
 import { spawn } from "node:child_process";
@@ -10,11 +11,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "audition";
-export interface ExportOptions { format?: ExportFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string }
+export interface ExportOptions { format?: ExportFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
-async function correct(directory: string, track: number, target: string, executable: string): Promise<void> {
-  const child = spawn(executable, [String(track)], { stdio: ["pipe", "pipe", "pipe"] });
+async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
+  const child = spawn(executable, [String(track)], { stdio: ["pipe", "pipe", "pipe"],signal,killSignal:"SIGKILL" });
   let stderr = "";
   child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-8192); });
   const exited = once(child, "close").then(([code]) => {
@@ -42,18 +43,13 @@ const codecs = { wav: "pcm_s16le", flac: "flac", mp3: "libmp3lame", ogg: "libopu
 function ffmpegPath(options: ExportOptions): string {
   return options.ffmpegPath ?? (process.env.FFMPEG_PATH?.trim() || (existsSync(path.resolve(__dirname,"../../bin/ffmpeg")) ? path.resolve(__dirname,"../../bin/ffmpeg") : "ffmpeg"));
 }
-async function convert(args: string[], executable: string): Promise<void> {
-  const child = spawn(executable,["-nostdin","-v","error","-n",...args],{stdio:["ignore","ignore","pipe"]});
-  let stderr = "";
-  child.stderr.on("data",chunk => { stderr = (stderr+chunk).slice(-8192); });
-  const [code] = await once(child,"close");
-  if (code !== 0) throw new Error(`Audio conversion failed (${code}): ${stderr}`);
-}
+async function convert(args:string[],executable:string,signal?:AbortSignal):Promise<void>{await runTool(executable,["-nostdin","-v","error","-n",...args],signal);}
 
 export async function exportSession(root: string, sessionID: string, options: ExportOptions = {}): Promise<string> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionID)) {
     throw new Error("Invalid session ID.");
   }
+  options.signal?.throwIfAborted();
   const requestedFormat=options.format??"ogg";
   const format=requestedFormat==="audition"?"wav":requestedFormat;
   if (!["ogg", "wav", "flac", "mp3"].includes(format)) throw new Error("Unsupported export format.");
@@ -71,13 +67,14 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   try {
     const manifest: Array<{ file: string; userID: string; username: string }> = [];
     for (const track of metadata.tracks) {
+      options.signal?.throwIfAborted();
       if (!Number.isInteger(track.track) || track.track < 1 || !users[track.track]) throw new Error("Invalid session track metadata.");
       const ogg = path.join(temporary, `track-${track.track}.ogg`);
-      await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"));
+      await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"),options.signal);
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
       if(start>0||end!==undefined){
         const trimmed=path.join(temporary,`trim-${track.track}.ogg`);
-        await convert(["-i",ogg,"-ss",String(start),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",trimmed],ffmpegPath(options));
+        await convert(["-i",ogg,"-ss",String(start),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);
         await rename(trimmed,ogg);
       }
       const file = `track-${track.track}.${format}`;
@@ -87,8 +84,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
           const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
           const args=["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`];
           if(start>0)args.push("-ss",String(start));if(end!==undefined)args.push("-t",String(end-start));
-          await convert([...args,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options));
-        }else await convert(["-i",ogg,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options));
+          await convert([...args,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
+        }else await convert(["-i",ogg,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
       }
       manifest.push({ file, userID: track.id, username: track.username });
     }
@@ -96,7 +93,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     if (options.mix) {
       mix = `mix.${format}`;
       const inputs = metadata.tracks.flatMap((track: any) => ["-i",path.join(temporary,`track-${track.track}.ogg`)]);
-      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options));
+      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options),options.signal);
     }
     if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
@@ -111,7 +108,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
     await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, title:metadata.title, format:requestedFormat, project:requestedFormat==="audition"?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
-    if(requestedFormat==="audition")await writeProjectZip(temporary);
+    if(requestedFormat==="audition")await writeProjectZip(temporary,options.signal);
+    options.signal?.throwIfAborted();
     await rename(temporary, target);
     return target;
   } catch (error) {

@@ -108,16 +108,23 @@ export class DownloadService {
     if(/^\/(browser|job|dashboard)\/[a-zA-Z0-9_-]{1,64}$/.test(url.pathname)){
       if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");
       if(url.pathname.startsWith("/dashboard/"))return this.dashboard(request,response,url);
-      if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
+      if(request.method!=="GET"&&!(url.pathname.startsWith("/job/")&&request.method==="POST"))return this.error(response,405,"Method not allowed.");
       const id=url.pathname.split("/")[2]!;
       if(url.pathname.startsWith("/browser/")){
         if(!this.liveSession(id))return this.error(response,404,"This recording session is no longer active.");
         return this.html(response,browserPage());
       }
       const job=this.queue?.get(id);if(!job)return this.error(response,404,"Export job not found.");
+      if(request.method==="POST"){
+        if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
+        if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
+        let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1024)return this.json(response,413,{error:"Request too large."});}
+        try{const data=JSON.parse(body);if(data.action==="cancel"){await this.queue!.cancel(job.id,job.guildID);return this.json(response,200,{state:this.queue!.get(job.id)!.state});}if(data.action==="retry"){const next=await this.queue!.retry(job.id,job.guildID);return this.json(response,202,{url:this.jobLink(next.id)});}return this.json(response,400,{error:"Unknown action."});}
+        catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Job action failed."});}
+      }
       const result=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{state:job.state,url:result,error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
-      return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>The Witness export</title><style>body{font:18px system-ui;max-width:680px;margin:70px auto;padding:24px;background:#101820;color:#edf2f7}a{color:#9dd9ff}</style><h1>Your export</h1><p id="status">Preparing your recording…</p><script>async function check(){try{const response=await fetch(location.href,{headers:{Accept:'application/json'}});if(!response.ok)throw Error('Link unavailable');const data=await response.json();const status=document.querySelector('#status');status.textContent=data.state;if(data.url){const link=document.createElement('a');link.href=data.url;link.textContent='Open downloads';status.replaceChildren(link);}else if(data.state==='failed'){status.textContent=data.error;}else setTimeout(check,2000);}catch(error){document.querySelector('#status').textContent=error.message;}}check();</script></html>`);
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:job.stage,url:result,error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
+      return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>The Witness export</title><style>body{font:18px system-ui;max-width:680px;margin:70px auto;padding:24px;background:#101820;color:#edf2f7}a{color:#9dd9ff}</style><h1>Your export</h1><p id="status">Preparing your recording…</p><button id="cancel" hidden>Cancel export</button><button id="retry" hidden>Retry export</button><p>Cancellation preserves your recording. Files already uploaded are not deleted.</p><script>async function check(){try{const response=await fetch(location.href,{headers:{Accept:'application/json'}});if(!response.ok)throw Error('Link unavailable');const data=await response.json();const status=document.querySelector('#status');status.textContent=data.state+' — '+(data.stage||'Waiting');document.querySelector('#cancel').hidden=!['queued','running'].includes(data.state);document.querySelector('#retry').hidden=!['failed','cancelled'].includes(data.state);if(data.url){const link=document.createElement('a');link.href=data.url;link.textContent='Open downloads';status.replaceChildren(link);}else if(['failed','cancelled'].includes(data.state)){status.textContent=data.error||'Export cancelled.';}else setTimeout(check,2000);}catch(error){document.querySelector('#status').textContent=error.message;}}for(const action of ['cancel','retry'])document.querySelector('#'+action).onclick=async()=>{try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});const data=await response.json();if(!response.ok)throw Error(data.error);if(data.url)location.href=data.url;else check();}catch(error){document.querySelector('#status').textContent=error.message;}};check();</script></html>`);
     }
     if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "POST") return this.error(response,405,"Method not allowed.");
     const parts = url.pathname.split("/");

@@ -210,3 +210,28 @@ survives restarts; a missing/deleted role can be replaced by a server manager.
 This policy governs Discord interactions. Existing private browser/download/
 dashboard links remain bearer links: holders can still access their linked web
 features. Do not treat this switch as Discord authentication for the web service.
+
+## Optional event recording
+
+Use `/eventrecord mode:enable event:<event ID or Discord event URL>` to select
+a scheduled voice-channel event. Manage Server permission is required, along
+with the configured Bot Wrangler role when role mode is enabled. Recording
+starts when Discord reports that selected event becoming active, using its name
+as the recording title. External and stage events are unsupported.
+
+Everything is off by default. Add `stop_on_end:true` only if the event should
+also stop its own recording when completed or cancelled. Manual recordings are
+never adopted by an event, and a manual stop stays stopped. Use `mode:status`
+to inspect rules or `mode:disable` to remove one. Rules survive restarts;
+starting events while the bot is offline is not replayed on reconnect.
+
+## Export cancellation and retry
+
+`/export` returns a job ID. `/exportjob action:status job:<ID>` shows progress;
+use `action:cancel` to stop queued or running work, or `action:retry` for a failed
+or cancelled job. The signed job page provides the same controls. Retry creates
+a new job and preserves original recordings. Cancellation interrupts audio
+tools, transcription, ZIP creation and upload requests. Files already uploaded
+to a cloud account are not removed. Shutdown interrupts active jobs and queues
+them for restart; cancelled jobs stay cancelled. Optional tools have a bounded
+execution timeout, and each cloud request has a two-minute timeout.
