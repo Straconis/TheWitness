@@ -17,6 +17,7 @@ export class RecordingSession {
   readonly tracks = new Map<string, Track>();
   readonly directory: string;
   state: "recording" | "completed" | "failed" = "recording";
+  packetStats = { duplicatesDropped: 0, latePacketsDropped: 0 };
   packets = 0;
   notes = 0;
   private notePacket = 0;
@@ -68,13 +69,15 @@ export class RecordingSession {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, guildID: this.guildID, channelID: this.channelID,
-      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes,
+      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, packetStats: this.packetStats,
       error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
   }
 
-  append(data: Buffer, userID: string, username: string, timestamp = 0): Promise<void> {
+  elapsedSamples(): bigint { return (process.hrtime.bigint() - this.start) * 48000n / 1000000000n; }
+
+  append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
     if (!userID || !data.length) return Promise.resolve();
     if (this.pendingBytes + data.length > 16 * 1024 * 1024) {
@@ -82,7 +85,7 @@ export class RecordingSession {
       return Promise.reject(this.failure);
     }
     const packet = Buffer.from(data);
-    const time = (process.hrtime.bigint() - this.start) * 48000n / 1000000000n;
+    const time = arrival ?? this.elapsedSamples();
     this.pendingBytes += packet.length;
     const task = this.queue.then(async () => {
       if (this.failure) throw this.failure;

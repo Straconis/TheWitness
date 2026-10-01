@@ -1,9 +1,11 @@
 import type Eris from "eris";
+import { PacketBuffer, VoicePacket } from "./jitter";
 import { RecordingSession } from "./session";
 
 export class RecordingManager {
   readonly sessions = new Map<string, RecordingSession>();
   private cleanup = new Map<string, () => void>();
+  private buffers = new Map<string, PacketBuffer>();
   private locks = new Map<string, Promise<unknown>>();
   private shuttingDown = false;
   constructor(private root: string) {}
@@ -32,13 +34,26 @@ export class RecordingManager {
       await session.close(error instanceof Error ? error : new Error(String(error))).catch(() => {});
       throw error;
     }
-    const onData = (data: Buffer, userID: string, timestamp: number) => {
-      if (!userID) return;
-      void session.append(data, userID, guild.members.get(userID)?.username ?? userID, timestamp).catch(error => {
-        console.error("[Recording] Capture failed:", error);
-        void this.exclusive(guild.id, () => this.stop(guild.id, error)).catch(error => console.error("[Recording] Finalization failed:", error));
-      });
+    const buffer = new PacketBuffer();
+    this.buffers.set(guild.id,buffer);
+    session.packetStats = buffer.stats;
+    let failing = false;
+    const fail = (error: Error) => {
+      if (failing) return;
+      failing = true;
+      console.error("[Recording] Capture failed:",error);
+      void this.exclusive(guild.id, () => this.stop(guild.id,error)).catch(error => console.error("[Recording] Finalization failed:",error));
     };
+    const write = (packets: VoicePacket[]) => {
+      for (const packet of packets) void session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival).catch(fail);
+    };
+    const onData = (data: Buffer, userID: string, timestamp: number) => {
+      if (!userID || failing) return;
+      try { write(buffer.push({ data,userID,username:guild.members.get(userID)?.username ?? userID,timestamp,arrival:session.elapsedSamples() })); }
+      catch (error) { fail(error as Error); }
+    };
+    const timer = setInterval(() => { if (!failing) write(buffer.flushAged(session.elapsedSamples())); },50);
+    timer.unref();
     const onDisconnect = (error?: Error) => {
       void this.exclusive(guild.id, () => this.stop(guild.id, error ?? new Error("Voice connection disconnected.")))
         .catch(error => console.error("[Recording] Disconnected:", error));
@@ -47,6 +62,7 @@ export class RecordingManager {
     receiver.on("data", onData);
     connection.on("disconnect", onDisconnect);
     this.cleanup.set(guild.id, () => {
+      clearInterval(timer);
       receiver.removeListener("data", onData);
       connection.removeListener("disconnect", onDisconnect);
     });
@@ -58,7 +74,14 @@ export class RecordingManager {
     if (!session) return;
     this.cleanup.get(guildID)?.();
     this.cleanup.delete(guildID);
-    try { await session.close(error); }
+    const buffer = this.buffers.get(guildID);
+    this.buffers.delete(guildID);
+    let finalError = error;
+    for (const packet of buffer?.flush() ?? []) {
+      try { await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival); }
+      catch (error) { finalError ??= error as Error; }
+    }
+    try { await session.close(finalError); }
     finally { this.sessions.delete(guildID); }
     return session;
   }

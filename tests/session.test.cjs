@@ -120,3 +120,18 @@ test('notes preserve timestamps and Craig note track and drain on close', async 
   await assert.rejects(session.note('Late note','alice'),/closed/);
  } finally { await rm(root,{recursive:true,force:true}); }
 });
+
+test('voice manager writes reordered RTP packets and flushes the final burst on stop',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-reorder-'));
+ try {
+  const manager=new RecordingManager(root),receiver=new EventEmitter(),connection=new EventEmitter();
+  connection.receive=()=>receiver;
+  const session=await manager.start({id:'guild',members:new Map()},'voice',connection);
+  for(const timestamp of [200,100,200,300]) receiver.emit('data',Buffer.from([0xf8,0xff,0xfe]),'alice',timestamp);
+  await manager.exclusive('guild',()=>manager.stop('guild'));
+  const data=pages(await readFile(path.join(session.directory,'audio.ogg.data')));
+  assert.deepEqual(data.filter((_,i)=>i%2).map(p=>Number(p.time)),[100,200,300]);
+  assert.equal(session.packets,3);
+  assert.equal(session.packetStats.duplicatesDropped,1);
+ } finally {await rm(root,{recursive:true,force:true});}
+});

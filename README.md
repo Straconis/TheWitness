@@ -104,3 +104,16 @@ speaker tracks. From the command line use
 Mixing requires FFmpeg and uses the corrected Opus originals before conversion,
 with normalized levels and the longest speaker track determining mix length.
 ZIP attachments and private download pages include the mix and notes.
+
+## Voice packet reliability
+
+Voice capture uses a bounded per-speaker reorder window modeled on Craig's
+16-packet buffer. It preserves each packet's original arrival time, handles
+32-bit RTP timestamp rollover, and removes duplicates or packets arriving after
+their place in the stream has already been written. Short bursts flush after
+about 200 ms; stopping drains every remaining packet before closing storage.
+Timestamp epochs reset after more than two seconds of silence to accommodate a
+restarted speaker stream. Dropped duplicate/late packet counts are retained in
+session metadata. The reorder buffer has a 16 MiB aggregate memory budget;
+exceeding it fails the session visibly instead of silently discarding audio.
+Automatic voice reconnection and live Discord validation remain unfinished.

@@ -19,7 +19,7 @@ additional notices when adapting other components or bundled dependencies.
 | Component | Craig source | The Witness today | Remaining work |
 | --- | --- | --- | --- |
 | Discord bot | apps/bot | Commands and voice joining | Typed interactions, command acknowledgement, live connection tests |
-| Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Packet reordering, reconnect behavior, end-to-end recording validation |
+| Multitrack recorder | apps/bot/src/modules/recorder | Opus capture, separate tracks and split-file session writer | Reconnect behavior and end-to-end recording validation |
 | Recovery | recorder/recording.ts and writer.ts | Graceful finalization, write errors and interrupted-session marking | Reconnection and validated recovery/export of interrupted files |
 | Automation | bot/modules/autorecord.ts | Persistent toggles; auto-record starts the engine | Scheduling/channel rules |
 | Notes and recording management | bot/commands | Server-scoped listing, notes and exports | Richer info, deletion and access-policy refinement |
@@ -58,7 +58,7 @@ by a future continuation-page implementation, not silently truncated.
 
 ## Current verification
 
-TypeScript build and twenty automated checks pass on Linux. Tests cover Ogg
+TypeScript build and twenty-five automated checks pass on Linux. Tests cover Ogg
 checksums/lacing, speaker separation, paired timestamps, concurrent starts,
 finalization, failure states, interrupted-session preservation, and real Opus
 encoding/correction/decoding through per-speaker exports. Craig's
@@ -72,9 +72,8 @@ conversion and decoding have also passed with a locally installed FFmpeg.
 Recordings are stored at `<RECORDING_PATH>/<session UUID>/audio.ogg.*`, with
 Witness lifecycle metadata in `session.json`. The `.info` file contains basic
 Craig-format identifiers and all feature flags, but is not yet a complete
-replacement for Craig's download authorization/recording database. Raw packets
-are currently stored in arrival order; packet jitter reordering and automatic
-reconnection remain to be adapted. Settings now persist across restarts. Discord ZIP delivery uses an 8 MiB budget;
+replacement for Craig's download authorization/recording database. Voice packets are now reordered in a bounded per-speaker window with original
+arrival times retained; automatic reconnection remains to be adapted. Settings now persist across restarts. Discord ZIP delivery uses an 8 MiB budget;
 large exports can use the optional signed-link download service. Command delivery remains
 unverified against a live Discord server.
 
@@ -82,6 +81,8 @@ Notes now preserve Craig's `STREAMNOTE` / `NOTE` convention on track 65536 and
 export as JSON. Optional mixed exports combine corrected Opus originals through
 FFmpeg before encoding the requested format. Local tests identify two distinct
 speaker tones in the mixed waveform and verify notes/mix delivery through ZIP
-and signed download paths. Packet jitter reordering remains unfinished; Craig's
-recorder buffers and sorts received packets before storage, while Witness still
-stores packets in arrival order.
+and signed download paths. Packet jitter handling now uses a 16-packet reorder window, with a 200 ms aged
+flush, timestamp rollover handling, duplicate/late detection, and shutdown drain.
+Tests cover the reorder buffer and its integration with on-disk timestamp pages.
+Automatic reconnection and recovery-to-export of interrupted recordings remain
+unfinished.
