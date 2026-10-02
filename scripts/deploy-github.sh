@@ -69,8 +69,12 @@ done
 old_dist=$(readlink -f dist)
 old_modules=$(readlink -f node_modules)
 # Preserve the first installed payload as a rollback release.
-if [[ ! -L dist ]]; then mv dist ".releases/original-dist-$revision";old_dist="$app/.releases/original-dist-$revision";ln -s "$old_dist" dist;fi
-if [[ ! -L node_modules ]]; then mv node_modules ".releases/original-modules-$revision";old_modules="$app/.releases/original-modules-$revision";ln -s "$old_modules" node_modules;fi
+if [[ ! -L dist || ! -L node_modules ]]; then
+  baseline=$(mktemp -d "$app/.releases/baseline.XXXXXX")
+  ln -s "$app/bin" "$baseline/bin"
+  if [[ ! -L dist ]]; then mv dist "$baseline/dist";old_dist="$baseline/dist";ln -s "$old_dist" dist;fi
+  if [[ ! -L node_modules ]]; then mv node_modules "$baseline/node_modules";old_modules="$baseline/node_modules";ln -s "$old_modules" node_modules;fi
+fi
 switch_link() { ln -s "$2" "$1.next"; mv -Tf "$1.next" "$1"; }
 rollback() {
   echo 'Deployment failed; restoring previous release.' >&2

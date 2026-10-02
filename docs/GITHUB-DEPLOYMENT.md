@@ -37,7 +37,8 @@ active with the same process ID across two checks, and restores the previous
 release if restart/startup fails. This is a process health check; it does not prove
 a live Discord voice session or web route works. GitHub Actions reports errors.
 If the bot stays busy for 30 minutes, the deployment fails without replacing code;
-rerun it when idle. Waiting runs are serialized and each successful push deploys.
+rerun it when idle. Deployments are serialized. Rapid pushes can supersede a pending workflow run;
+the newest tested version is deployed.
 
 To stop automatic updates, disable the workflow in GitHub Actions. To remove VPS
 restart permission, remove `/etc/sudoers.d/the-witness-github-deploy` as administrator.
