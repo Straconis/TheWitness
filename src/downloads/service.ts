@@ -1,3 +1,4 @@
+import { legalPage } from "./legal-page";
 import {getServerIntro,uploadIntroChunk} from "../exports/server-intro";
 import { recordingPage } from "./recording-page";
 import { resolveAudioFormat, ProjectTrackFormat } from "../exports/formats";
@@ -114,6 +115,10 @@ export class DownloadService {
     response.setHeader("X-Content-Type-Options","nosniff");
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
+    if (["/terms", "/privacy", "/terms/", "/privacy/"].includes(url.pathname)) {
+      if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
+      return this.html(response, request.method === "HEAD" ? "" : legalPage(url.pathname.startsWith("/terms") ? "terms" : "privacy"));
+    }
     if(url.pathname==="/oauth/callback"){
       if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
       try{if(url.searchParams.has("error"))throw Error("Account connection was declined. Start again from the owner command line.");const provider=await new CloudAccounts(this.root).callback(url.searchParams.get("state")??"",url.searchParams.get("code")??"",this.publicURL);return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><h1>${provider} connected</h1><p>You can close this window. Uploads remain opt-in.</p></html>`);}
