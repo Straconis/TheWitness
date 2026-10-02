@@ -36,6 +36,19 @@ for tool in ffmpeg whisper-cli models; do ln -s "$app/bin/$tool" "$release/bin/$
 cd "$release"
 node - <<'JS'
 if (Number(process.versions.node.split('.')[0]) !== 24) throw Error('Node 24 required');
+// ensureOpusBinding: Opus includes the glibc version in its lookup path.
+// A binary built against the older CI glibc works on this newer Debian glibc,
+// but must be placed at the path computed for the production host.
+const fs=require('node:fs'),path=require('node:path');
+const packageFile=require.resolve('@discordjs/opus/package.json');
+const packageRoot=path.dirname(packageFile);
+const expected=require('@discordjs/node-pre-gyp').find(packageFile);
+if(!fs.existsSync(expected)){
+ const candidates=fs.readdirSync(path.join(packageRoot,'prebuild')).filter(name=>name.includes(`-${process.platform}-${process.arch}-glibc-`));
+ if(candidates.length!==1)throw Error('Cannot select the production Opus binding');
+ const binding=path.join(packageRoot,'prebuild',candidates[0],'opus.node');
+ fs.mkdirSync(path.dirname(expected),{recursive:true});fs.copyFileSync(binding,expected);
+}
 const {OpusEncoder}=require('@discordjs/opus');new OpusEncoder(48000,2).encode(Buffer.alloc(3840));
 require('@snazzah/davey');
 const {downloadName}=require('./dist/downloads/names');
