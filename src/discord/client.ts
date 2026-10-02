@@ -58,8 +58,8 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       {
         type: 1,
         name: "record",
-        description: "Join your voice channel and begin recording.",
-        options:[{type:3,name:"title",description:"Optional recording title",max_length:120}]
+        description: "Join the selected voice channel and begin recording.",
+        options:[{type:7,name:"channel",description:"Voice channel to record",required:true,channel_types:[2]},{type:3,name:"title",description:"Optional recording title",max_length:120}]
       },
       {
         type: 1,
@@ -492,20 +492,14 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
 
     if (commandName === "record") {
-      const memberID = interaction.member?.id;
-
-      const member = memberID
-        ? guild.members.get(memberID)
-        : undefined;
-
-      const voiceChannelID = member?.voiceState.channelID;
-
-      if (!voiceChannelID) {
-        await interaction.createMessage({
-          content: "You need to be in a voice channel first.",
-          flags: 64
-        });
-        return;
+      const voiceChannelID=interaction.data?.options?.find((option:any)=>option.name==="channel")?.value;
+      const voiceChannel=guild.channels.get(voiceChannelID);
+      if(!voiceChannelID||voiceChannel?.type!==2){
+        await interaction.createMessage({content:"Choose a voice channel in this server with /record channel:… .",flags:64});return;
+      }
+      const permissions=interaction.member?voiceChannel.permissionsOf(interaction.member):undefined;
+      if(!permissions?.has("viewChannel")||!permissions.has("voiceConnect")){
+        await interaction.createMessage({content:"You need permission to view and connect to the selected voice channel.",flags:64});return;
       }
 
       const proposedTitle=interaction.data?.options?.find((option:any)=>option.name==="title")?.value;

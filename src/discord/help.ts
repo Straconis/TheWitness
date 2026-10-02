@@ -11,8 +11,8 @@ export interface HelpContext {downloads:boolean;restricted:boolean}
 const pages:Record<string,string>={
  start:[
   "The Witness records separate, synchronized audio tracks for your group.",
-  "**1. Join a voice channel.** Have your participants join too.",
-  "**2. Start:** `/record title:Session 12` (the title is optional).",
+  "**1. Choose a voice channel.** Have your participants join it.",
+  "**2. Start:** `/record channel:General Voice title:Session 12` (the title is optional).",
   "**3. During the session:** `/note text:Combat starts` adds a timestamped note. Use `/status` or the recording panel to check progress.",
   "**4. Finish:** `/stop` saves the recording and leaves voice.",
   "**5. Find it:** `/recordings` lists recent sessions. Copy the session ID from the entry you want.",
@@ -21,7 +21,7 @@ const pages:Record<string,string>={
   "Choose a topic below, or jump directly with `/help topic:Exports & formats`."
  ].join("\n\n"),
  recording:[
-  "**`/record [title]`** — Join your current voice channel and start recording. One recording can be active per server; different servers can record simultaneously.",
+  "**`/record channel:<voice-channel> [title]`** — Select the voice channel to record; the title is optional. You can start it from text chat without joining voice yourself, provided you can view and connect to the selected channel. One recording can be active per server; different servers can record simultaneously.",
   "**`/stop`** — Finish and save the current recording, then leave voice. A second `/stop` does not delete anything.",
   "**`/status`** — Check recording state, speaker count, saved packets, voice connection, and disk space.",
   "**`/note text:…`** — Add a timestamped note. The panel's **Add note** button does the same.",
@@ -66,7 +66,7 @@ const pages:Record<string,string>={
   "The bot needs permission to view/connect to the voice channel and to send messages in the channel used for commands/panels. Ask a server manager if recording cannot start."
  ].join("\n\n"),
  troubleshooting:[
-  "**Cannot start?** Join a voice channel first. Check bot channel permissions, your Wrangler role, and `/status`. Stop the current recording before switching voice channels in the same server.",
+  "**Cannot start?** Select a voice channel with `/record channel:…`. Check your permission to view/connect to that channel, the bot's channel permissions, your Wrangler role, and `/status`. Stop the current recording before switching voice channels in the same server.",
   "**No commands in a newly invited server?** Commands currently register when the bot connects. Ask the host operator to restart it when idle, then reopen Discord's command picker.",
   "**Interrupted or failed recording?** Run `/recordings`, copy its ID, then `/recover session:<session-id>`. Recovery preserves the original files and returns a **new session ID**; export that recovered session.",
   "**Export unavailable or failed?** Use a completed session from this server. For queued exports, inspect `/exportjob action:status job:<job-id>` and retry failed jobs with `action:retry`. An attachment above 8 MiB needs the host's web download service.",

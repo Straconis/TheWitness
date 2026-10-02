@@ -257,3 +257,6 @@ or troubleshooting directly. Help includes command examples and shows whether
 web downloads are enabled on the host. Help is available to everyone, including
 members without the configured Bot Wrangler role; operational access rules remain
 in effect.
+
+`/record` requires a `channel` selection and accepts an optional `title`. You can
+start it from text chat if you have permission to view/connect to that voice channel.
