@@ -4,7 +4,7 @@ set -euo pipefail
 app=/opt/the-witness
 address=thewitness.dev
 cd "$app"
-export PATH=/usr/local/bin:/usr/bin:/bin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 exec 9> .releases/deploy.lock
 flock -n 9 || { echo "A deployment is running; try setup again when it finishes."; exit 1; }
 export DOTENV_CONFIG_QUIET=true
