@@ -116,9 +116,13 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     if (options.mix) {
       mix = `mix.${format==="aac"?"m4a":format}`;
       const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track));
-      const mixedTracks=manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1])));
+      const mixedTracks=manifest.filter(track=>track.userID!=="server-intro"&&!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1])));
       const inputs = mixedTracks.flatMap(track => ["-i",path.join(temporary,track.file)]);
       await convert([...inputs,"-filter_complex",`amix=inputs=${mixedTracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options),options.signal);
+      if(intro){const introTrack=manifest.find(track=>track.userID==="server-intro")!,introFile=path.join(temporary,introTrack.file),mixFile=path.join(temporary,mix);
+        if(options.normalizeIntro){const target=await measureLevel(mixFile,ffmpegPath(options),options.signal),level=await measureLevel(introFile,ffmpegPath(options),options.signal);if(target.rms>0){const gain=normalizationGain(level,target.rms);await applyGain(introFile,gain,codecs[format],ffmpegPath(options),options.signal);introGain*=gain;}}
+        const combined=path.join(temporary,"intro-"+mix);await convert(["-i",mixFile,"-i",introFile,"-filter_complex","amix=inputs=2:duration=longest:normalize=0","-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),combined],ffmpegPath(options),options.signal);await rename(combined,mixFile);
+      }
     }
     if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
