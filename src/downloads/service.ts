@@ -1,3 +1,5 @@
+import { recordingPage } from "./recording-page";
+import { resolveAudioFormat, ProjectTrackFormat } from "../exports/formats";
 import { transcriptionReady } from "../integrations/transcription-config";
 import { editorPage } from "./editor-page";
 import { waveform } from "./waveforms";
@@ -39,6 +41,7 @@ export class DownloadService {
   attach(queue:ExportQueue,settings:SettingsStore,manager:RecordingManager,space?:StorageMonitor):void {this.space=space;this.queue=queue;this.settings=settings;this.manager=manager;}
   private liveSession(id:string):RecordingSession|undefined {return [...(this.manager?.sessions.values() ?? [])].find(session=>session.id===id);}
   private issue(route:string,lifetimeSeconds=86400):string {const expires=String(Math.floor(Date.now()/1000)+lifetimeSeconds);return `${this.publicURL}${route}?expires=${expires}&signature=${this.signature(route,expires)}`;}
+  recordingLink(id:string,lifetimeSeconds=86400):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/recording/${id}`,lifetimeSeconds);}
   browserLink(id:string):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/browser/${id}`);}
   jobLink(id:string):string {if(!sessionIDPattern.test(id))throw new Error("Invalid job.");return this.issue(`/job/${id}`);}
   dashboardLink(guildID:string):string {if(!/^[a-zA-Z0-9_-]{1,64}$/.test(guildID))throw new Error("Invalid server.");return this.issue(`/dashboard/${guildID}`);}
@@ -114,6 +117,25 @@ export class DownloadService {
       if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
       try{if(url.searchParams.has("error"))throw Error("Account connection was declined. Start again from the owner command line.");const provider=await new CloudAccounts(this.root).callback(url.searchParams.get("state")??"",url.searchParams.get("code")??"",this.publicURL);return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><h1>${provider} connected</h1><p>You can close this window. Uploads remain opt-in.</p></html>`);}
       catch(error){return this.error(response,400,error instanceof Error?error.message:"Account connection failed.");}
+    }
+    if(url.pathname.startsWith("/recording/")){
+      const id=url.pathname.slice(11);
+      if(!sessionIDPattern.test(id))return this.error(response,404,"Recording not found.");
+      if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");
+      if(!this.queue)return this.error(response,503,"Downloads unavailable.");
+      const metadata=JSON.parse(await readFile(path.join(this.root,id,"session.json"),"utf8"));
+      const saved=await getSession(this.root,id,metadata.guildID);
+      if(saved.state!=="completed"||!saved.tracks.length)return this.error(response,400,"This recording has no completed audio tracks to download.");
+      if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady()));
+      if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
+      if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
+      if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
+      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>4096)return this.json(response,413,{error:"Request too large."});}
+      try{
+        const data=JSON.parse(body);resolveAudioFormat(data.format,data.trackFormat);
+        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
+        return this.json(response,202,{url:this.jobLink(job.id)});
+      }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
     }
     if(/^\/(browser|job|dashboard)\/[a-zA-Z0-9_-]{1,64}$/.test(url.pathname)){
       if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");

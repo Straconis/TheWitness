@@ -15,8 +15,8 @@ const pages:Record<string,string>={
   "**2. Start:** `/record channel:General Voice title:Session 12` (the title is optional).",
   "**3. During the session:** `/note text:Combat starts` adds a timestamped note. Use `/status` or the recording panel to check progress.",
   "**4. Finish:** `/stop` saves the recording and leaves voice.",
-  "**5. Find it:** `/recordings` lists recent sessions. Copy the session ID from the entry you want.",
-  "**6. Download:** `/export session:<session-id> format:audition`. Replace `<session-id>` with the ID you copied. Open the returned export-status link or download the Discord attachment.",
+  "**5. Download from the saved card:** click Download to open a private web page and choose formats there. If no audio was captured, Download is disabled. You can also use `/recordings` to find saved session IDs.",
+  "**6. Or export by command:** `/export session:<session-id> format:audition`. Replace `<session-id>` with the ID you copied. Open the returned export-status link or download the Discord attachment.",
   "Audition is the default export. Extract the whole ZIP and open `session.sesx`; keep its media files together. Use `format:wav` for separate WAV tracks instead.",
   "Choose a topic below, or jump directly with `/help topic:Exports & formats`."
  ].join("\n\n"),

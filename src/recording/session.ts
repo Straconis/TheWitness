@@ -15,6 +15,7 @@ interface Track { id: string; username: string; track: number; packet: number; p
 export class RecordingSession {
   title?:string;
   readonly id = randomUUID();
+  endedAt?: string;
   readonly startedAt = new Date().toISOString();
   readonly tracks = new Map<string, Track>();
   readonly directory: string;
@@ -154,7 +155,8 @@ export class RecordingSession {
       const results = await Promise.allSettled([...this.files.values()].map(file => file.close()));
       for (const result of results) if (result.status === "rejected") this.failure ??= result.reason;
       this.state = this.failure ? "failed" : "completed";
-      await this.metadata(new Date().toISOString());
+      this.endedAt=new Date().toISOString();
+      await this.metadata(this.endedAt);
       if (this.failure) throw this.failure;
     })();
     return this.closing;

@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const retention=new RetentionRunner(config.recordingPath,settingsStore,recordings,exportQueue);retention.start();
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
-  if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!); }
+  if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!,config.downloadHost); }
   const client = createDiscordClient(downloads,exportQueue);
 
   let shuttingDown = false;

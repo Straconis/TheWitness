@@ -24,7 +24,7 @@ test('restricted members can open and navigate help, but operational commands re
   async function dispatch(type,data){let done,timer;const result=new Promise(resolve=>done=resolve);const interaction={type,data,guildID:'123',member:{roles:[]},createMessage:async body=>done({kind:'create',body}),editParent:async body=>done({kind:'update',body})};
    client.emit('interactionCreate',interaction);try{return await Promise.race([result,new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Help interaction timed out')),2000))]);}finally{clearTimeout(timer);}
   }
-  const start=await dispatch(2,{name:'help'});assert.equal(start.kind,'create');assert.equal(start.body.flags,64);assert.ok(start.body.embeds[0].description.includes('**6. Download:**'));assert.ok(start.body.embeds[0].fields[0].value.includes('Bot Wrangler'));
+  const start=await dispatch(2,{name:'help'});assert.equal(start.kind,'create');assert.equal(start.body.flags,64);assert.ok(start.body.embeds[0].description.includes('**6. Or export by command:**'));assert.ok(start.body.embeds[0].fields[0].value.includes('Bot Wrangler'));
   const direct=await dispatch(2,{name:'help',options:[{name:'topic',value:'permissions'}]});assert.equal(direct.body.embeds[0].title,'The Witness · Permissions & privacy');
   const select=await dispatch(3,{custom_id:'witness:help',values:['exports']});assert.equal(select.kind,'update');assert.equal(select.body.flags,undefined);assert.equal(select.body.embeds[0].title,'The Witness · Exports & formats');
   const invalid=await dispatch(3,{custom_id:'witness:help',values:['<@everyone>']});assert.equal(invalid.body.embeds[0].title,'The Witness · Quick start');

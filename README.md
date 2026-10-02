@@ -264,3 +264,10 @@ start it from text chat if you have permission to view/connect to that voice cha
 The live recording panel uses a Discord embed with state colors, duration, speaker
 track/note counts, channel, start time, packet drops, and session ID. Low-space
 warnings appear in the card; Status, Add note, and Stop stay below it.
+
+Recording cards show the server name and icon. Completed cards retain the final
+duration and offer a Download button that opens a private format-selection website; cards with no captured tracks explain why downloads are unavailable.
+
+The private recording download panel offers Audition/Audacity projects and Ogg Opus, WAV, FLAC, MP3, and AAC tracks. Project exports have a separate WAV/FLAC track choice; Audition defaults to FLAC and Audacity to WAV. `/export track_format` exposes the same project choice. Download links are signed, recording-specific, and expire after 24 hours.
+
+For the current RackNerd host, an administrator can run `sudo bash /opt/the-witness/scripts/enable-downloads-ip.sh` once to configure HTTPS at the VPS IP, an nginx proxy to the loopback-only download service, and automatic IP certificate renewal. This setup requires idle recordings/exports and does not print the bot credentials. `DOWNLOAD_BIND_HOST` controls the listener address; the setup sets it to `127.0.0.1`.

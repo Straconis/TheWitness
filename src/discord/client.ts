@@ -50,6 +50,7 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
+        { type: 3, name: "track_format", description: "Individual tracks for Audition or Audacity projects", choices: ["wav","flac"].map(value=>({name:value.toUpperCase(),value})) },
         { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase(), value })) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
@@ -160,7 +161,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
-  const panels=new RecordingPanels(client,storageMonitor);recordingPanels=panels;
+  const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
+  const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
 
   const events=new EventRecording(settingsStore,recordings,async event=>{
     const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new Error("Event voice channel unavailable.");
@@ -241,6 +243,16 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     if([2,3,5].includes(interaction.type)&&wranglerSettings&&!configuringAccess&&!mayUseBot(wranglerSettings,interaction.member?.roles)){
       try{await interaction.createMessage({content:"The Witness is restricted to the configured Bot Wrangler role. Ask a server manager to assign you the role or switch access to everyone.",flags:64});}catch(error){console.warn("[Access] Could not send access response.",error);}return;
     }
+    const downloadSelection=interaction.type===3?/^witness:download:([a-f0-9-]{36})$/i.exec(interaction.data?.custom_id??""):null;
+    if(downloadSelection){
+      await interaction.defer(64);
+      try{
+        const session=await getSession(config.recordingPath,downloadSelection[1]!,interaction.guildID);
+        if(session.state!=="completed"||!session.tracks.length)throw new Error("This recording has no completed audio to download.");
+        await interaction.editOriginalMessage({content:downloads?`[Open your private download panel](${downloads.recordingLink(session.id)})\nChoose project and audio formats on that page. This link expires in 24 hours; share it only with your group.`:"Web downloads are not enabled on this host yet. Use /export to get a Discord attachment, or ask the host operator to enable the download website."});
+      }catch(error){await interaction.editOriginalMessage({content:"This recording is unavailable in this server or has no completed audio to download."});}
+      return;
+    }
     if(interaction.type===3||interaction.type===5){
       const match=/^witness:(status|note|stop|note-submit):([a-f0-9-]{36})$/i.exec(interaction.data?.custom_id??"");if(!match)return;
       try{
@@ -248,7 +260,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if(!session||session.id!==match[2]){await interaction.createMessage({content:"This recording is no longer active.",flags:64});return;}
         if(match[1]==="note"&&interaction.type===3){await interaction.createModal({title:"Add a session note",custom_id:`witness:note-submit:${session.id}`,components:[{type:1,components:[{type:4,custom_id:"note",style:2,label:"Note",required:true,max_length:2000}]}]});return;}
         await interaction.defer(64);
-        if(match[1]==="status"){const {components,...body}=panelBody(session,storageMonitor.status?.low);await interaction.editOriginalMessage(body);return;}
+        if(match[1]==="status"){const {components,...body}=panelBody(session,storageMonitor.status?.low,Date.now(),panelContext(session));await interaction.editOriginalMessage(body);return;}
         if(match[1]==="note-submit"&&interaction.type===5){const text=interaction.data?.components?.flatMap((row:any)=>row.components??[]).find((item:any)=>item.custom_id==="note")?.value;await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)throw new Error("Recording has stopped.");await session.note(text,interaction.member?.id??"unknown");});await interaction.editOriginalMessage({content:"Timestamped note saved."});await panels.update();return;}
         if(match[1]==="stop"&&interaction.type===3){recordings.cancelReconnect(session.guildID);await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)return;try{await recordings.stop(session.guildID);}finally{const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);}});await interaction.editOriginalMessage({content:"Recording stopped and saved."});await panels.update();return;}
         await interaction.editOriginalMessage({content:"Unsupported panel action."});
@@ -390,18 +402,19 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         const options = interaction.data?.options ?? [];
         const id = options.find((option: any) => option.name === "session")?.value;
         const format = (options.find((option: any) => option.name === "format")?.value ?? "audition") as ExportFormat;
+        const trackFormat=options.find((option:any)=>option.name==="track_format")?.value;
         const sourceSession=await getSession(config.recordingPath, id, guildID);
         const mix = options.find((option: any) => option.name === "mix")?.value === true;
         if(downloads&&exportQueue){
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
           const upload=options.find((option:any)=>option.name==="upload")?.value;
-          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload});
+          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat});
           await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}\n[Open export status](${downloads.jobLink(job.id)})`});return;
         }
         if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
           await interaction.editOriginalMessage({content:"Enable the download service to use queued transcription or cloud uploads."});return;
         }
-        const directory = await exportSession(config.recordingPath, id, { format, mix });
+        const directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat });
         if (downloads) {
           const link = downloads.link(id, path.basename(directory));
           await interaction.editOriginalMessage({ content: `Your speaker tracks are ready.\n[Open private downloads](${link})\nThis link expires in 24 hours. Share it only with your group.` });

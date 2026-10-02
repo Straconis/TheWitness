@@ -1,3 +1,4 @@
+import {resolveAudioFormat,ProjectTrackFormat} from "./formats";
 import { exportEdited } from "./edited-export";
 import { AudioEdits,validateEdits,renderEdits } from "./edits";
 import { writeAudacity } from "./audacity";
@@ -14,7 +15,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity";
-export interface ExportOptions { format?: ExportFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
+export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
@@ -55,7 +56,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   if(options.sourceExport)return exportEdited(root,sessionID,options);
   options.signal?.throwIfAborted();
   const requestedFormat=options.format??"ogg";
-  const format=requestedFormat==="audition"?"flac":requestedFormat==="audacity"?"wav":requestedFormat;
+  const format=resolveAudioFormat(requestedFormat,options.trackFormat);
   if (!["ogg", "wav", "flac", "mp3", "aac"].includes(format)) throw new Error("Unsupported export format.");
   const start=options.trimStart??0,end=options.trimEnd;
   if(!Number.isFinite(start)||start<0||(end!==undefined&&(!Number.isFinite(end)||end<=start)))throw new Error("Invalid trim range.");
@@ -115,7 +116,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(["audition","audacity"].includes(requestedFormat))await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);

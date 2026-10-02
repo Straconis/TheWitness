@@ -6,6 +6,7 @@ export interface WitnessConfig {
   recordingPath: string;
   lowDiskWarningBytes:number;
   downloadPort?: number;
+  downloadHost?: string;
   downloadPublicURL?: string;
 }
 
@@ -30,6 +31,7 @@ export const config: WitnessConfig = {
   lowDiskWarningBytes:warningGiB*1024**3,
   discordToken: requireEnv("DISCORD_TOKEN"),
   downloadPort: downloadPort ? Number(downloadPort) : undefined,
+  downloadHost: process.env.DOWNLOAD_BIND_HOST?.trim() || "0.0.0.0",
   downloadPublicURL: process.env.DOWNLOAD_PUBLIC_URL?.trim(),
   recordingPath: path.resolve(
     process.cwd(),
