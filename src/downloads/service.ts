@@ -53,7 +53,7 @@ export class DownloadService {
     return /^\d{1,12}$/.test(expires)&&Number(expires)>Math.floor(Date.now()/1000)&&/^[a-f0-9]{64}$/.test(signature)&&timingSafeEqual(Buffer.from(signature,"hex"),Buffer.from(this.signature(route,expires),"hex"));
   }
   private html(response:ServerResponse,html:string):void {
-    response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; connect-src 'self'; worker-src blob:; media-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+    response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; connect-src 'self'; worker-src blob:; media-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'");
     response.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});response.end(html);
   }
   private json(response:ServerResponse,status:number,value:unknown):void {response.writeHead(status,{"Content-Type":"application/json"});response.end(JSON.stringify(value));}
@@ -116,6 +116,13 @@ export class DownloadService {
     response.setHeader("X-Content-Type-Options","nosniff");
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
+    if (url.pathname === "/assets/witness-banner.png") {
+      if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
+      const banner = await readFile(path.resolve(__dirname,"../../docs/images/discord_banner.png"));
+      response.writeHead(200,{"Content-Type":"image/png","Content-Length":banner.length});
+      response.end(request.method === "HEAD" ? undefined : banner);
+      return;
+    }
     if (["/invite", "/invite/"].includes(url.pathname)) {
       if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
       return this.html(response, request.method === "HEAD" ? "" : invitePage());
