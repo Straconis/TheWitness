@@ -27,6 +27,7 @@ export class RecordingManager {
   const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name);
   try{this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
+  this.syncSessions.delete(guild.id);
   const sync=this.settings?.get(guild.id).sync;if(sync?.enabled){const slate=new SessionSync(session,sync);this.syncSessions.set(guild.id,slate);slate.start();}
   return session;
  }

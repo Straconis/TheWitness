@@ -22,7 +22,7 @@ export class SessionSync {
    for(let frame=0;frame<15;frame++){
     const pcm=Buffer.alloc(3840);for(let i=0;i<960;i++){const n=frame*960+i;const envelope=Math.min(1,n/240,(14400-n)/240);const value=Math.round(Math.sin(n*2*Math.PI*1000/48000)*6000*envelope);pcm.writeInt16LE(value,i*4);pcm.writeInt16LE(value,i*4+2);}
     await this.session.append(encoder.encode(pcm),"witness-sync","Sync cues",Number((sample+BigInt(frame*960))&0xffffffffn),sample+BigInt(frame*960));
-    await delay(20,undefined,{signal});
+    await delay(20);
    }
    await this.session.note(`SYNC ${kind.toUpperCase()} ${cue.id}`,"witness-sync",sample);cue.state="captured";
   }catch(error){cue.state="cancelled";if(!signal?.aborted)throw error;}finally{await this.save();}
