@@ -260,3 +260,7 @@ in effect.
 
 `/record` requires a `channel` selection and accepts an optional `title`. You can
 start it from text chat if you have permission to view/connect to that voice channel.
+
+The live recording panel uses a Discord embed with state colors, duration, speaker
+track/note counts, channel, start time, packet drops, and session ID. Low-space
+warnings appear in the card; Status, Add note, and Stop stay below it.
