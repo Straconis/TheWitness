@@ -4,6 +4,40 @@
 
 The Witness is a self-hosted multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. It runs on a RackNerd VPS with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
 
+## How The Witness differs from Craig
+
+[Craig](https://craig.chat/) provides the multitrack recording foundation and remains an established option for Discord communities. The Witness adapts Craig's recording files and timestamp correction for a privately operated service, with export options aimed at reducing weekly TTRPG editing work. Craig's attribution is preserved in [its license notice](licenses/Craig-ISC.txt).
+
+The comparison below refers to **Craig's public hosted service**. Craig also publishes [self-hosting instructions](https://github.com/CraigChat/craig/blob/master/SELFHOST.md); hosting and operational policies can differ for self-hosted installations.
+
+| Area | Craig's public service | The Witness |
+| --- | --- | --- |
+| Hosting and maintenance | A hosted bot you invite to your server. | You operate the bot and recording storage. This deployment uses a RackNerd VPS, with tested releases deployed automatically on pushes to GitHub. |
+| Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | No subscription-based duration cap; disk space and host resources still limit recording. Optional retention is controlled by the operator. |
+| Transcription | Available to Tier 3 Supporters. | Optional local whisper.cpp transcription, producing TXT, SRT, and VTT without a Witness subscription. Requires a configured executable/model and processing capacity. |
+| Export formats | Advertises FLAC, AAC, Audacity projects, and Adobe Audition sessions; its FAQ says MP3 export is unavailable. | FLAC, WAV, AAC/M4A, Ogg Opus, MP3, Audacity import projects, and Adobe Audition sessions. Project ZIPs offer WAV or FLAC for individual tracks. |
+| Customization | Public service features and settings are maintained by Craig's operators. | Source, deployment, server settings, and export behavior are controlled by your operator. Implemented features have no Witness premium tiers; hosting still has a cost. |
+
+Craig's service details were checked on October 2, 2026 against its [official website](https://craig.chat/) and [FAQ](https://craig.chat/faq/). They can change.
+
+### The Witness export workflow
+
+The private download page lets you combine these options in one export:
+
+- Select speakers for the mixdown while keeping their separate tracks.
+- Add a reusable server intro before the session, with optional volume matching to the selected speakers.
+- Normalize speaker levels independently of intro matching.
+- Remove shared silent pauses longer than a chosen duration (0.1–3600 seconds; default 30). Cuts apply to all processed speaker tracks together, and notes follow the new timeline.
+- Include full-length, uncut FLAC copies alongside processed tracks in the ZIP. These originals have no trims, normalization, edits, or intro padding.
+- Choose date-only (`YYYY-MM-DD.zip`), date plus channel, or original download filenames.
+- Include local transcription and export notes with the project.
+
+These describe Witness's implemented workflow, rather than claiming Craig lacks every comparable feature. The Witness does not reproduce the complete Craig ecosystem, browser editor, or backup-bot service.
+
+### What has been verified
+
+Generated recordings and production downloads have verified codecs, both speakers in a mixdown, synchronized silence cuts, intro insertion and volume matching, uncut originals, ZIP contents, and transcription completion. These checks do **not** establish real conversation transcription accuracy or live Discord recording reliability. A real microphone/group session remains the next validation step. See [the implementation comparison](docs/CRAIG-PARITY.md) for additional scope and limitations.
+
 ## Goals
 
 - Per-user multitrack Discord voice recording
