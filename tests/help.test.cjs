@@ -34,3 +34,10 @@ test('restricted members can open and navigate help, but operational commands re
 });
 
 test('export help explains project track choice, exclusions, reusable intros, and synchronized silence trimming',()=>{const description=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;for(const text of ['track_format','Zelvik','Server intro','30 seconds','same cuts','defaults off','Normalize speaker audio','Match intro volume'])assert.ok(description.includes(text),text);assert.ok(description.length<=4096);});
+
+ test('help documents the recording cap and configured hosted transcription',()=>{
+ const recording=helpMessage('recording',{downloads:true,restricted:false}).embeds[0].description;
+ for(const text of ['8-hour maximum','stops automatically','saved for export','Start a new recording','skips the sync end cue'])assert.ok(recording.includes(text),text);
+ const exports=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;
+ for(const text of ['Whisper on the server','TXT, SRT, and VTT','without user setup','Self-hosting'])assert.ok(exports.includes(text),text);
+});

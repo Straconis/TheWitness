@@ -15,7 +15,7 @@ const pages:Record<string,string>={
   "**Configure once:** open `/dashboard`, enable Audio/video sync cues, choose Start only, End only, or Start and end, and set delays (3–60 seconds). Settings apply to the next recording. End delay starts when you press Stop; Witness keeps recording through the cue.",
   "**Pair Cameraman:** copy the private pairing URL into Cameraman’s Sync settings ([C] in its output window). Enable pairing. This read-only URL contains a secret, expires after one year, and must stay private.",
   "**Capture:** start OBS before Witness. Capture the Cameraman OUTPUT window (the map capture alone will not contain its flash), and include system audio for its beep. Stop OBS after the end flash. Cameraman must stay running and connected.",
-  "**Result:** Witness saves a separate Sync cues track and SYNC markers. Cameraman flashes the matching cue ID and plays a beep. Match the start/end cues in your editor to measure differences. Normal Stop emits an end cue; crashes and forced shutdowns cannot guarantee one.",
+  "**Result:** Witness saves a separate Sync cues track and SYNC markers. Cameraman flashes the matching cue ID and plays a beep. Match the start/end cues in your editor to measure differences. Normal Stop emits an end cue within the 8-hour capture limit; the cap skips it; crashes and forced shutdowns cannot guarantee one.",
   "Cue IDs and source/export positions are in `manifest.json` → `syncCues`; Cameraman writes `sync-cues.jsonl` with output-frame timing, lateness, and network uncertainty. These log times are not OBS encoded-video timestamps. Network/frame/audio latency limits precision; use the actual recorded cues. Missed cues are logged rather than replayed late.",
   "For drift checks use original, uncut audio. Intros, silence trimming, and mixer edits change alignment; edited-export cue positions are marked unknown. Validate a short OBS session before relying on it."
  ].join("\n\n"),
@@ -32,6 +32,7 @@ const pages:Record<string,string>={
  ].join("\n\n"),
  recording:[
   "**`/record channel:<voice-channel> [title]`** — Select the voice channel to record; the title is optional. You can start it from text chat without joining voice yourself, provided you can view and connect to the selected channel. One recording can be active per server; different servers can record simultaneously.",
+  "**8-hour maximum:** every session stops automatically after 8 hours, including silence and reconnect time. Audio is saved for export and the bot leaves voice. The panel explains the limit. Start a new recording to continue; the cap skips the sync end cue.",
   "**`/stop`** — Finish and save the current recording, then leave voice. A second `/stop` does not delete anything.",
   "**`/status`** — Check recording state, speaker count, saved packets, voice connection, and disk space.",
   "**`/note text:…`** — Add a timestamped note. The panel's **Add note** button does the same.",
@@ -41,6 +42,7 @@ const pages:Record<string,string>={
  ].join("\n\n"),
  exports:[
   "**`/export session:<session-id> [format] [track_format] [mix] [transcribe] [upload]`** — Export a **completed** recording. Get its ID with `/recordings`; recover interrupted recordings first.",
+  "**Transcription:** the live deployment already runs Whisper on the server. Select Include a transcript or use `transcribe:true` to produce TXT, SRT, and VTT without user setup or a subscription. Self-hosting operators must configure an executable/model and processing capacity.",
   "**Formats:** `audition` (default): ZIP with an Audition session and FLAC media. `audacity`: ZIP with an import project and WAV media. `ogg`, `wav`, `flac`, `mp3`, `aac`: individual speaker audio; AAC files use `.m4a`.",
   "**Example:** `/export session:<session-id> format:flac mix:true` adds a mixdown of the synchronized speaker tracks alongside the separate tracks. For a project, `format:audition track_format:wav` chooses WAV media instead of its FLAC default; Audacity defaults to WAV and also supports FLAC.",
   "With web downloads enabled, open the returned status link and wait for **Ready**. Otherwise, exports attach in Discord with an 8 MiB limit. Web audio exports offer individual files; project formats provide a ZIP.",

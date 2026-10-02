@@ -18,6 +18,7 @@ export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now()
   {name:"Packet drops",value:String(session.packetStats.duplicatesDropped+session.packetStats.latePacketsDropped),inline:true},
   {name:"Session",value:`\`${session.id}\``}
  ];
+ if(session.stopReason==="duration-limit")fields.push({name:"8-hour session limit reached",value:"Recording stopped automatically. Start a new recording to continue."});
  if(lowSpace)fields.push({name:"⚠️ Low disk space",value:"Recording storage is running low. Ask the host operator to review available space."});
  if(context.serverName)fields.unshift({name:"Server",value:context.serverName.replace(/[\\`*_~|]/g,"\\$&").slice(0,256)});
  if(session.state==="completed")fields.push({name:"Downloads",value:session.tracks.size?"Choose Open Downloads to configure your export and select a file format.":"No audio was captured, so there are no speaker tracks to download."});

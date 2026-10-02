@@ -102,7 +102,7 @@ are preserved. Multiple holders of a private link share the saved edit; the last
 save wins. Use WAV/FLAC sources when editing to avoid another lossy encoding pass.
 Playback preview uses browser media timing; final edits render through FFmpeg.
 The editor supports up to 100 tracks, 500 clips and a 24-hour timeline; the
-recording engine has no artificial duration cap. Adjust note times after moving
+recording engine stops and saves each session at its hard 8-hour maximum. Adjust note times after moving
 conversation clips. Browser editing is for post-session use, not a new in-game
 window requirement.
 

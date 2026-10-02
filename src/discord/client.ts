@@ -165,6 +165,11 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
   const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
 
+  recordings.onDurationLimit=async session=>{
+    const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);
+    await panels.update();
+  };
+
   const events=new EventRecording(settingsStore,recordings,async event=>{
     const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new Error("Event voice channel unavailable.");
     const connection=await joinVoiceChannel(client,guild,event.channelID);

@@ -17,8 +17,8 @@ The comparison below refers to **Craig's public hosted service**. Craig also pub
 | Area | Craig's public service | The Witness |
 | --- | --- | --- |
 | Hosting and maintenance | A hosted bot you invite to your server. | Use the version hosted by the project owner, or run your own instance. The hosted deployment uses a RackNerd VPS with automatic deployment from GitHub. |
-| Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | No subscription-based duration cap; disk space and host resources still limit recording. Optional retention is controlled by the operator. |
-| Transcription | Available to Tier 3 Supporters. | Optional local whisper.cpp transcription, producing TXT, SRT, and VTT without a Witness subscription. Requires a configured executable/model and processing capacity. |
+| Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | Hard 8-hour maximum per recording session; disk space and host resources also limit recording. Optional retention is controlled by the operator. |
+| Transcription | Available to Tier 3 Supporters. | Server-side Whisper transcription is already configured on the live deployment and produces TXT, SRT, and VTT when requested for an export, without a subscription or user setup. Self-hosted instances need a Whisper executable/model and processing capacity. |
 | Export formats | Advertises FLAC, AAC, Audacity projects, and Adobe Audition sessions; its FAQ says MP3 export is unavailable. | FLAC, WAV, AAC/M4A, Ogg Opus, MP3, Audacity import projects, and Adobe Audition sessions. Project ZIPs offer WAV or FLAC for individual tracks. |
 | Customization | Public service features and settings are maintained by Craig's operators. | Use the hosted version without managing deployment, or use the available source to control your own instance. Implemented features have no Witness premium tiers; hosting still has a cost. |
 
@@ -47,7 +47,7 @@ Generated recordings and production downloads have verified codecs, both speaker
 - Per-user multitrack Discord voice recording
 - Self-hosted on a VPS with automatic deployment from GitHub
 - All implemented features available without premium tiers
-- No artificial recording-duration limits
+- 8-hour maximum recording sessions
 - No plugin marketplace architecture
 - Local recording storage
 - Reliable session recovery
@@ -174,8 +174,11 @@ checksummed complete audio from interrupted sessions into a new session while
 keeping the original. `/delete` requires explicit confirmation and Manage Server.
 
 Exports persist in a disk-backed queue and resume queued jobs after restart.
-Optional transcription and cloud adapters require additional configuration and
-live verification; see `.env.example`. Full Craig parity is still tracked in
+The live deployment already has server-side Whisper transcription configured: select
+Include a transcript on the download page or use `transcribe:true` with `/export`
+to produce TXT, SRT, and VTT without user setup or a subscription. Self-hosting
+operators must provide the bundled or configured executable/model and processing
+capacity; cloud adapters require separate configuration. See `.env.example`. Full Craig parity is still tracked in
 `docs/CRAIG-PARITY.md`.
 
 ## Audition projects and readable download names
@@ -216,7 +219,7 @@ Audition must still verify how it displays these markers.
 Storage checks run at startup and once a minute. Below `LOW_DISK_WARNING_GIB`
 (default 1 GiB), the console logs a warning when entering the low-space state.
 The dashboard and `/status` show available space and a low-space warning. No
-automatic deletion or artificial recording-duration limit is added. Filesystem
+automatic deletion is enabled by default. Sessions have a hard 8-hour cap. Filesystem
 free space does not necessarily reflect hosting-provider storage quotas.
 
 ## Compact Discord recording panel
@@ -328,7 +331,7 @@ Enable “Include uncut original speaker recordings” to add full-length FLAC c
 
 ## Audio/video sync with VTT Cameraman
 
-The optional sync slate identifies offset and drift; correction is left to editing. It is disabled by default. In `/dashboard`, enable **Audio/video sync cues**, choose **Start only**, **End only**, or **Start and end**, and set the cue delays (3–60 seconds). Settings are snapshotted for the next recording. The end delay is measured **after Stop is pressed**: recording continues until the cue finishes, then finalizes. There is no prediction of an unknown recording end time. A short session stopped before its scheduled start cue cancels that cue. Errors, crashes, and service shutdowns do not emit an end cue.
+The optional sync slate identifies offset and drift; correction is left to editing. It is disabled by default. In `/dashboard`, enable **Audio/video sync cues**, choose **Start only**, **End only**, or **Start and end**, and set the cue delays (3–60 seconds). Settings are snapshotted for the next recording. The end delay is measured **after Stop is pressed**: recording continues until the cue finishes, then finalizes. There is no prediction of an unknown recording end time. A short session stopped before its scheduled start cue cancels that cue. Errors, crashes, service shutdowns, and the 8-hour cap do not emit an end cue.
 
 Copy the dashboard’s private **Cameraman pairing URL** into VTT Cameraman’s Sync settings (`C` in its output window, or `python -m vtt_cameraman.main --sync-settings`). Enable pairing and keep Cameraman running. The URL is signed, read-only, scoped to this server’s cue IDs/timing, and expires after one year; it does not grant recording downloads. Keep it secret. Sync settings apply to manual, scheduled, and event recordings through the same recording lifecycle.
 
@@ -339,3 +342,15 @@ Witness inserts a 300 ms, 1 kHz beep on a separate **Sync cues** track, with a m
 Export `manifest.json` includes `syncCues`: shared IDs, target UTC, source recording seconds, original-audio seconds, and processed-export seconds where calculable. The recorder’s first-audio offset, excerpt boundaries, silence cuts, and intros are accounted for. Arbitrary mixer edits make a single exported cue position ambiguous, so it is `null` rather than guessed. Cameraman’s `sync-cues.jsonl` records output-frame submission time, not the encoded OBS timeline; locate the flash in the video for its actual position. Use uncut original audio for drift measurements, because processing intentionally changes timing. Transcription may see the cue track; exclude it from mixes if unwanted.
 
 Validation: automated lifecycle, marker/export, feed authorization, tone, and client scheduling tests. A real OBS audio/video capture and long-session drift test still needs to be performed. `/help topic:Audio/video sync cues` explains the setup in Discord.
+
+## Recording session duration
+
+Every recording session has a hard **8-hour maximum**, measured from session
+creation, including silence and reconnect time. This applies to manual, automatic,
+event, scheduled, and browser microphone recording. At the cap, capture stops,
+buffered audio from before the deadline is drained, the recording is finalized
+as completed, and the bot leaves voice. The saved recording card explains that
+the limit was reached; audio remains available for normal exports. Storage errors
+still produce a failed session requiring recovery. The cap skips the delayed sync
+end cue; even a normal Stop near the deadline cannot extend audio capture beyond
+eight hours. Start a new recording to continue; no new session starts automatically.

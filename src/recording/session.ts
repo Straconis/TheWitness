@@ -8,12 +8,18 @@ import path from "node:path";
 import { recordingFeatures } from "./features";
 import { BOS, encodeOggPage } from "./ogg";
 
+export const MAX_RECORDING_DURATION_MS = 8 * 60 * 60 * 1000;
+export const MAX_RECORDING_SAMPLES = BigInt(MAX_RECORDING_DURATION_MS) * 48n;
+
 const OPUS_HEAD = Buffer.from([0x4f,0x70,0x75,0x73,0x48,0x65,0x61,0x64,1,2,0,15,0x80,0xbb,0,0,0,0,0]);
 const OPUS_TAGS = Buffer.from([0x4f,0x70,0x75,0x73,0x54,0x61,0x67,0x73,9,0,0,0,0x6e,0x6f,0x64,0x65,0x2d,0x6f,0x70,0x75,0x73,0,0,0,0,0xff]);
 interface Track { id: string; username: string; track: number; packet: number; pcmFile?:string; pcmSamples?:number; pcmStart?:number }
 
 export class RecordingSession {
   title?:string;
+  stopReason?: "duration-limit";
+  onDurationLimit?: () => Promise<void>;
+  private durationTimer?: NodeJS.Timeout;
   readonly id = randomUUID();
   endedAt?: string;
   readonly startedAt = new Date().toISOString();
@@ -53,6 +59,11 @@ export class RecordingSession {
         startTime: session.startedAt, features: recordingFeatures
       }, null, 2));
       await session.metadata();
+      session.durationTimer = setTimeout(() => {
+        session.stopReason = "duration-limit";
+        void (session.onDurationLimit?.() ?? session.close()).catch(error => console.error("[Recording] Duration-limit finalization failed:", error));
+      }, Math.max(0, MAX_RECORDING_DURATION_MS - Number(session.elapsedSamples()) / 48));
+      session.durationTimer.unref();
       return session;
     } catch (error) {
       await Promise.allSettled([...session.files.values()].map(file => file.close()));
@@ -75,7 +86,7 @@ export class RecordingSession {
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID, channelName: this.channelName,
       startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats,
-      error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
+      error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
   }
@@ -91,6 +102,9 @@ export class RecordingSession {
 
   append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint, originalPCM?:Buffer): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
+    // Guard every input path even if the deadline timer is delayed or a stop is queued.
+    const capturedTime = arrival ?? this.elapsedSamples();
+    if (capturedTime >= MAX_RECORDING_SAMPLES) return Promise.resolve();
     if (!userID || !data.length) return Promise.resolve();
     if (this.pendingBytes + data.length + (originalPCM?.length??0) > 16 * 1024 * 1024) {
       this.failure = new Error("Recording storage cannot keep up with incoming audio.");
@@ -99,7 +113,6 @@ export class RecordingSession {
     const packet = Buffer.from(data);
     const pcm=originalPCM?Buffer.from(originalPCM):undefined;
     // Craig reserves granule zero for headers; audio must begin at sample one or later.
-    const capturedTime = arrival ?? this.elapsedSamples();
     const time = capturedTime > 0n ? capturedTime : 1n;
     this.pendingBytes += packet.length+(pcm?.length??0);
     const task = this.queue.then(async () => {
@@ -130,6 +143,7 @@ export class RecordingSession {
 
   note(text: string, authorID: string, atSamples?:bigint): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
+    if (this.elapsedSamples() >= MAX_RECORDING_SAMPLES || (atSamples !== undefined && atSamples >= MAX_RECORDING_SAMPLES)) return Promise.reject(new Error("The 8-hour recording limit has been reached."));
     if (!text.trim() || text.length > 2000) return Promise.reject(new Error("Notes must contain between 1 and 2000 characters."));
     const time = atSamples ?? this.elapsedSamples();
     const task = this.queue.then(async () => {
@@ -146,6 +160,7 @@ export class RecordingSession {
   close(error?: Error): Promise<void> {
     if (this.closing) return this.closing;
     this.accepting = false;
+    clearTimeout(this.durationTimer);
     this.closing = (async () => {
       await this.queue;
       if (error) this.failure ??= error;

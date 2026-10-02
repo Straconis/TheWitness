@@ -9,6 +9,7 @@ import { RecordingSession } from "./session";
 type Connector = () => Promise<Eris.VoiceConnection>;
 
 export class RecordingManager {
+ onDurationLimit?: (session:RecordingSession) => Promise<void>;
  readonly sessions=new Map<string,RecordingSession>();
  private cleanup=new Map<string,()=>void>();private buffers=new Map<string,PacketBuffer>();
  private locks=new Map<string,Promise<unknown>>();private reconnecting=new Map<string,AbortController>();private shuttingDown=false;
@@ -27,6 +28,13 @@ export class RecordingManager {
   const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name);
   try{this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
+  session.onDurationLimit=async()=>{
+   this.cancelReconnect(guild.id);
+   await this.exclusive(guild.id,async()=>{
+    if(this.sessions.get(guild.id)!==session)return;
+    try{await this.stop(guild.id);}finally{await this.onDurationLimit?.(session);}
+   });
+  };
   this.syncSessions.delete(guild.id);
   const sync=this.settings?.get(guild.id).sync;if(sync?.enabled){const slate=new SessionSync(session,sync);this.syncSessions.set(guild.id,slate);slate.start();}
   return session;
@@ -73,7 +81,7 @@ export class RecordingManager {
  }
  async stop(guildID:string,error?:Error):Promise<RecordingSession|undefined>{
   this.cancelReconnect(guildID);const session=this.sessions.get(guildID);if(!session)return;
-  try{await this.syncSessions.get(guildID)?.stop(!error&&!this.shuttingDown);}catch(cueError){console.warn('[Sync] End cue failed:',cueError);}
+  try{await this.syncSessions.get(guildID)?.stop(!error&&!this.shuttingDown&&session.stopReason!=="duration-limit");}catch(cueError){console.warn('[Sync] End cue failed:',cueError);}
   this.cleanup.get(guildID)?.();this.cleanup.delete(guildID);
   const buffer=this.buffers.get(guildID);this.buffers.delete(guildID);let finalError=error;
   for(const packet of buffer?.flush()??[]){try{await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival);}catch(error){finalError??=error as Error;}}
