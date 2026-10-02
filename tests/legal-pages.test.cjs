@@ -11,7 +11,7 @@ test('policy routes are public, support HEAD, reject mutations and preserve priv
   const port=await service.listen(0,'127.0.0.1'),base=`http://127.0.0.1:${port}`;
   for(const route of ['/terms','/privacy','/terms/','/privacy/']){
    const response=await fetch(base+route);assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/text\/html/);
-   const html=await response.text();assert.match(html,/self-hosted/);assert.match(html,/<main/);assert.match(html,/href="\/privacy"/);
+   const html=await response.text();assert.match(html,/self-hosted/);assert.match(html,/<main/);assert.match(html,/mailto:support@thewitness.dev/);assert.match(html,/href="\/privacy"/);
    assert.equal(response.headers.get('referrer-policy'),'no-referrer');
    const head=await fetch(base+route,{method:'HEAD'});assert.equal(head.status,200);assert.equal(await head.text(),'');
    const post=await fetch(base+route,{method:'POST'});assert.equal(post.status,405);await post.text();
