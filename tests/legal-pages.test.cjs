@@ -16,6 +16,10 @@ test('policy routes are public, support HEAD, reject mutations and preserve priv
    const head=await fetch(base+route,{method:'HEAD'});assert.equal(head.status,200);assert.equal(await head.text(),'');
    const post=await fetch(base+route,{method:'POST'});assert.equal(post.status,405);await post.text();
   }
+  const invite=await fetch(base+'/invite');assert.equal(invite.status,200);
+  const inviteHTML=await invite.text();assert.match(inviteHTML,/Add to Discord/);assert.match(inviteHTML,/client_id=1542557380594761778/);assert.match(inviteHTML,/scope=bot%20applications.commands/);
+  assert.equal((await fetch(base+'/invite',{method:'HEAD'})).status,200);
+  assert.equal((await fetch(base+'/invite',{method:'POST'})).status,405);
   const denied=await fetch(base+'/recording/11111111-1111-4111-8111-111111111111');assert.equal(denied.status,403);await denied.text();
   const unknown=await fetch(base+'/privacy-extra');assert.equal(unknown.status,404);await unknown.text();
  }finally{await service?.close();await rm(root,{recursive:true,force:true});}
