@@ -37,7 +37,7 @@ export async function transcribeExport(directory:string,options:{executable:stri
      // Whisper can extend its final timestamp beyond the actual chunk.
      // Bound subtitles to the audio instead of failing the entire export.
      const duration=audioBytes/32000;
-     if(start<duration&&end>start&&item.text.trim())segments.push({start:start+offset,end:Math.min(end,duration)+offset,text:item.text,speaker:track.username});
+     if(start<duration&&end>start&&item.text.trim()&&!/^\s*\[BLANK_AUDIO\]\s*$/i.test(item.text))segments.push({start:start+offset,end:Math.min(end,duration)+offset,text:item.text,speaker:track.username});
     }
     if(audioBytes<300*32000)break;
    }finally{await rm(temporary,{force:true});await rm(output+".json",{force:true});}
