@@ -95,7 +95,7 @@ sleep 15
 systemctl is-active --quiet "$service"
 [[ "$(systemctl show "$service" -p MainPID --value)" == "$pid" ]]
 # Keep the stable forced-command entry point synchronized for future pushes.
-for helper in deploy-github.sh deploy-idle.cjs enable-github-deploy.sh enable-downloads-ip.sh; do
+for helper in deploy-github.sh deploy-idle.cjs enable-github-deploy.sh enable-downloads-ip.sh enable-downloads-domain.sh; do
   install -m 0755 "$release/scripts/$helper" "$app/scripts/$helper.next"
   mv -f "$app/scripts/$helper.next" "$app/scripts/$helper"
 done
