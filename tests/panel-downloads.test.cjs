@@ -24,6 +24,6 @@ test('Audition WAV and Audacity FLAC exports contain the selected audio and a pr
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-project-format-'));
  try{const session=await RecordingSession.create(root,'guild','voice'),encoder=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840);
  for(let i=0;i<20;i++)await session.append(encoder.encode(pcm),'speaker','Speaker',i*960);await session.close();
- for(const [format,trackFormat] of [['audition','wav'],['audacity','flac']]){const directory=await exportSession(root,session.id,{format,trackFormat}),manifest=JSON.parse(await readFile(path.join(directory,'manifest.json')));assert.equal(manifest.trackFormat,trackFormat);assert.ok(manifest.tracks[0].file.endsWith('.'+trackFormat));assert.equal((await readFile(path.join(directory,'project.zip'))).subarray(0,2).toString(),'PK');}
+ for(const [format,trackFormat] of [['audition','wav'],['audacity','flac']]){const directory=await exportSession(root,session.id,{format,trackFormat}),manifest=JSON.parse(await readFile(path.join(directory,'manifest.json')));assert.equal(manifest.trackFormat,trackFormat);assert.ok(manifest.tracks[0].file.endsWith('.'+trackFormat));const zip=await readFile(path.join(directory,'project.zip'));assert.equal(zip.subarray(0,2).toString(),'PK');if(format==='audacity')assert.ok(zip.includes(Buffer.from('session_data/'+manifest.tracks[0].file)));}
  }finally{await rm(root,{recursive:true,force:true});}
 });
