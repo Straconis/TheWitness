@@ -1,5 +1,5 @@
 import {measureLevel,normalizationGain,applyGain,AudioLevel} from "./normalization";
-import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut} from "./silence";
+import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut,silenceSeconds} from "./silence";
 import {getServerIntro,introPCM} from "./server-intro";
 import {validateMixExclusions} from "./mix-selection";
 import {resolveAudioFormat,ProjectTrackFormat} from "./formats";
@@ -19,7 +19,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity";
-export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean; introID?:string; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
+export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean; introID?:string; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
@@ -57,6 +57,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionID)) {
     throw new Error("Invalid session ID.");
   }
+  silenceSeconds(options.silenceSeconds??30);
   if(options.sourceExport)return exportEdited(root,sessionID,options);
   options.signal?.throwIfAborted();
   const requestedFormat=options.format??"ogg";
@@ -76,6 +77,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   try {
     if(options.edits)validateEdits(options.edits,metadata.tracks.map((track:any)=>track.track));
     const intro=options.introID?await getServerIntro(root,metadata.guildID,options.introID):undefined;if(options.introID&&!intro)throw Error("Saved intro not found.");
+    const rawTracks:Array<{file:string;userID:string;username:string}>=[];
     const manifest: Array<{ file: string; userID: string; username: string }> = [];
     for (const track of metadata.tracks) {
       options.signal?.throwIfAborted();
@@ -83,6 +85,15 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       const ogg = path.join(temporary, `track-${track.track}.ogg`);
       await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"),options.signal);
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
+      if(options.includeRaw){
+        const file=`raw-track-${track.track}.flac`;
+        if(track.pcmFile){
+          if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw Error("Invalid browser source.");
+          const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
+          await convert(["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
+        }else await convert(["-i",ogg,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
+        rawTracks.push({file,userID:track.id,username:track.username});
+      }
       if(start>0||end!==undefined){
         const trimmed=path.join(temporary,`trim-${track.track}.ogg`);
         await convert(["-i",ogg,"-ss",String(start),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);
@@ -104,7 +115,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       manifest.push({ file, userID: track.id, username: edit?.name||track.username });
     }
     let silenceCuts:SilenceCut[]=[];
-    if(options.trimSilence){const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track)),files=manifest.map(track=>path.join(temporary,track.file)),selected=new Set(manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>path.join(temporary,track.file)));const detected=await findSilenceCuts(files,selected,ffmpegPath(options),options.signal);silenceCuts=detected.cuts;await cutSharedSilence(files,silenceCuts,detected.duration,codecs[format],ffmpegPath(options),options.signal);}
+    if(options.trimSilence){const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track)),files=manifest.map(track=>path.join(temporary,track.file)),selected=new Set(manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>path.join(temporary,track.file)));const detected=await findSilenceCuts(files,selected,ffmpegPath(options),options.signal,options.silenceSeconds??30);silenceCuts=detected.cuts;await cutSharedSilence(files,silenceCuts,detected.duration,codecs[format],ffmpegPath(options),options.signal);}
     let introGain=1;
     if(options.normalizeAudio||(intro&&options.normalizeIntro)){
       const levels=new Map<string,AudioLevel>();for(const track of manifest){const file=path.join(temporary,track.file),level=await measureLevel(file,ffmpegPath(options),options.signal);const gain=options.normalizeAudio?normalizationGain(level):1;await applyGain(file,gain,codecs[format],ffmpegPath(options),options.signal);levels.set(track.file,{rms:level.rms*gain,peak:level.peak*gain});}
@@ -137,8 +148,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
-    if(["audition","audacity"].includes(requestedFormat))await writeProjectZip(temporary,options.signal);
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:(["audition","audacity"].includes(requestedFormat)||options.includeRaw)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceSeconds:options.trimSilence?(options.silenceSeconds??30):undefined, rawTracks:options.includeRaw?rawTracks:undefined, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    if(["audition","audacity"].includes(requestedFormat)||options.includeRaw)await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);
     return target;

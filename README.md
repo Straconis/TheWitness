@@ -278,8 +278,10 @@ Private download pages let you choose which speaker tracks appear in mixed audio
 
 Download pages can save a reusable intro per Discord server (WAV, FLAC, MP3, or Ogg; up to 30 MB and five minutes). Enable it per export to add a separate intro track and shift all speaker audio and notes after it. Queued exports retain the intro version selected when queued. Intro and silence-trimming options default off.
 
-“Trim pauses longer than 30 seconds” detects shared silence in the selected speakers (100 ms windows, -50 dBFS threshold), removes the whole qualifying pause, and applies identical cuts to every exported speaker track. Activity on an excluded speaker does not prevent a cut. Notes move with the edited timeline; intro audio is added afterward and is never silence-trimmed. Original recordings are preserved.
+“Trim shared silent pauses” (configurable on the download page from 0.1–3600 seconds, default 30) detects shared silence in the selected speakers (100 ms windows, -50 dBFS threshold), removes the whole qualifying pause, and applies identical cuts to every exported speaker track. Activity on an excluded speaker does not prevent a cut. Notes move with the edited timeline; intro audio is added afterward and is never silence-trimmed. Original recordings are preserved.
 
 Optional speaker normalization uses constant gain toward -20 dBFS active-audio RMS (100 ms windows above -50 dBFS), with a 20 dB maximum boost and a -1 dBFS peak ceiling. It preserves dynamics rather than compressing them. “Match intro volume to selected speakers” uses the selected speakers’ audible RMS after any speaker normalization, applies gain to the intro, and observes the same safety limits. Silence does not lower the measured target. Both settings default off and original media is preserved.
 
 When mixed audio includes an intro, speaker mixing finishes first, then the intro is added without changing the speaker mix gain. Intro matching uses the measured speaker mix level for mixed exports, so adding an intro does not reduce its volume according to participant count.
+
+Enable “Include uncut original speaker recordings” to add full-length FLAC copies alongside processed tracks and inside ZIP downloads. These copies have no trims, normalization, edits, or intro padding; lossy source audio remains limited by its original recording quality.

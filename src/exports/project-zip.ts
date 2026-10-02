@@ -7,7 +7,7 @@ export async function writeProjectZip(directory:string,signal?:AbortSignal):Prom
  const output=await open(path.join(directory,"project.zip"),"wx");let offset=0n;const records:Buffer[]=[];
  async function write(bytes:Buffer){signal?.throwIfAborted();let position=0;while(position<bytes.length){const result=await output.write(bytes,position,bytes.length-position,null);if(!result.bytesWritten)throw new Error("ZIP storage made no progress.");position+=result.bytesWritten;}offset+=BigInt(bytes.length);}
  try{
-  let entries=(await readdir(directory)).filter(name=>/^(session\.(sesx|aup)|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(wav|flac)|track-\d+\.(wav|flac))$/.test(name)).sort();
+  let entries=(await readdir(directory)).filter(name=>/^(session\.(sesx|aup)|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(name)).sort();
   if(entries.includes("session.aup")){entries=entries.filter(name=>!/^track-\d+\.(wav|flac)$/.test(name));entries.push(...(await readdir(path.join(directory,"session_data"))).filter(name=>/^track-\d+\.(wav|flac)$/.test(name)).map(name=>"session_data/"+name));}
   for(const entry of entries){const filename=path.join(directory,entry),size=(await stat(filename)).size,name=Buffer.from(entry);let value=0xffffffff;
    for await(const chunk of createReadStream(filename)){signal?.throwIfAborted();value=crc(chunk,value);}value=(value^0xffffffff)>>>0;
