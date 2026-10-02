@@ -2,7 +2,11 @@
 
 # The Witness
 
-The Witness is a self-hosted multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. It runs on a RackNerd VPS with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
+The Witness is a multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. A hosted version is provided by the project owner on a RackNerd VPS, with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
+
+## Hosted or self-hosted — your choice
+
+A hosted version of The Witness is provided by the project owner for people who want to use the bot without running a server themselves. Self-hosting is optional: the source code is available so you can run your own instance, inspect how it works, or customize it if you want to. You do not need to deploy the source code to use the hosted version.
 
 ## How The Witness differs from Craig
 
@@ -12,11 +16,11 @@ The comparison below refers to **Craig's public hosted service**. Craig also pub
 
 | Area | Craig's public service | The Witness |
 | --- | --- | --- |
-| Hosting and maintenance | A hosted bot you invite to your server. | You operate the bot and recording storage. This deployment uses a RackNerd VPS, with tested releases deployed automatically on pushes to GitHub. |
+| Hosting and maintenance | A hosted bot you invite to your server. | Use the version hosted by the project owner, or run your own instance. The hosted deployment uses a RackNerd VPS with automatic deployment from GitHub. |
 | Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | No subscription-based duration cap; disk space and host resources still limit recording. Optional retention is controlled by the operator. |
 | Transcription | Available to Tier 3 Supporters. | Optional local whisper.cpp transcription, producing TXT, SRT, and VTT without a Witness subscription. Requires a configured executable/model and processing capacity. |
 | Export formats | Advertises FLAC, AAC, Audacity projects, and Adobe Audition sessions; its FAQ says MP3 export is unavailable. | FLAC, WAV, AAC/M4A, Ogg Opus, MP3, Audacity import projects, and Adobe Audition sessions. Project ZIPs offer WAV or FLAC for individual tracks. |
-| Customization | Public service features and settings are maintained by Craig's operators. | Source, deployment, server settings, and export behavior are controlled by your operator. Implemented features have no Witness premium tiers; hosting still has a cost. |
+| Customization | Public service features and settings are maintained by Craig's operators. | Use the hosted version without managing deployment, or use the available source to control your own instance. Implemented features have no Witness premium tiers; hosting still has a cost. |
 
 Craig's service details were checked on October 2, 2026 against its [official website](https://craig.chat/) and [FAQ](https://craig.chat/faq/). They can change.
 
