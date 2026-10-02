@@ -33,4 +33,4 @@ test('restricted members can open and navigate help, but operational commands re
  }finally{await recordings.shutdown();await closeRecordingPanels();await rm(root,{recursive:true,force:true});}
 });
 
-test('export help explains project track choice, exclusions, reusable intros, and synchronized silence trimming',()=>{const description=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;for(const text of ['track_format','Zelvik','Server intro','30 seconds','same cuts','defaults off'])assert.ok(description.includes(text),text);assert.ok(description.length<=4096);});
+test('export help explains project track choice, exclusions, reusable intros, and synchronized silence trimming',()=>{const description=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;for(const text of ['track_format','Zelvik','Server intro','30 seconds','same cuts','defaults off','Normalize speaker audio','Match intro volume'])assert.ok(description.includes(text),text);assert.ok(description.length<=4096);});
