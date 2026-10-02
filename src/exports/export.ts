@@ -1,3 +1,5 @@
+import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut} from "./silence";
+import {getServerIntro,introPCM} from "./server-intro";
 import {validateMixExclusions} from "./mix-selection";
 import {resolveAudioFormat,ProjectTrackFormat} from "./formats";
 import { exportEdited } from "./edited-export";
@@ -16,7 +18,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity";
-export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
+export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; trimSilence?:boolean; introID?:string; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
@@ -72,6 +74,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   await mkdir(temporary);
   try {
     if(options.edits)validateEdits(options.edits,metadata.tracks.map((track:any)=>track.track));
+    const intro=options.introID?await getServerIntro(root,metadata.guildID,options.introID):undefined;if(options.introID&&!intro)throw Error("Saved intro not found.");
     const manifest: Array<{ file: string; userID: string; username: string }> = [];
     for (const track of metadata.tracks) {
       options.signal?.throwIfAborted();
@@ -96,8 +99,13 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       }
       const edit=options.edits?.tracks.find(edit=>edit.track===track.track);
       if(edit){const edited=path.join(temporary,`edited-${track.track}.${format==="aac"?"m4a":format}`);await renderEdits(path.join(temporary,file),edited,edit,options.edits!.tracks.some(track=>track.solo),codecs[format],ffmpegPath(options),options.signal);await rename(edited,path.join(temporary,file));}
+
       manifest.push({ file, userID: track.id, username: edit?.name||track.username });
     }
+    let silenceCuts:SilenceCut[]=[];
+    if(options.trimSilence){const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track)),files=manifest.map(track=>path.join(temporary,track.file)),selected=new Set(manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>path.join(temporary,track.file)));const detected=await findSilenceCuts(files,selected,ffmpegPath(options),options.signal);silenceCuts=detected.cuts;await cutSharedSilence(files,silenceCuts,detected.duration,codecs[format],ffmpegPath(options),options.signal);}
+    if(intro)for(const track of manifest){const file=track.file;if(intro){const shifted=path.join(temporary,`shifted-${file}`);await convert(["-i",path.join(temporary,file),"-af",`adelay=${Math.round(intro.seconds*48000)}S:all=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),shifted],ffmpegPath(options),options.signal);await rename(shifted,path.join(temporary,file));}}
+    if(intro){const number=Math.max(...metadata.tracks.map((track:{track:number})=>track.track))+1,file=`track-${number}.${format==="aac"?"m4a":format}`;await convert(["-f","s16le","-ar","48000","-ac","2","-i",introPCM(root,metadata.guildID,intro.id),"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);manifest.push({file,userID:"server-intro",username:"Intro: "+intro.name});}
     let mix: string | undefined;
     if (options.mix) {
       mix = `mix.${format==="aac"?"m4a":format}`;
@@ -113,13 +121,13 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       const lines = (await readFile(path.join(directory,"notes.jsonl"),"utf8")).trim();
       if (lines) {
         const origin=(metadata.audioOrigin??0)/48000;
-        exportedNotes=lines.split("\n").map(line=>JSON.parse(line)).map(note=>{if(!Number.isFinite(note.seconds)||typeof note.text!=="string")throw new Error("Invalid recording note.");return {...note,seconds:note.seconds-origin};}).filter(note=>note.seconds>=start&&(end===undefined||note.seconds<end)).map(note=>({...note,seconds:note.seconds-start}));
+        exportedNotes=lines.split("\n").map(line=>JSON.parse(line)).map(note=>{if(!Number.isFinite(note.seconds)||typeof note.text!=="string")throw new Error("Invalid recording note.");return {...note,seconds:note.seconds-origin};}).filter(note=>note.seconds>=start&&(end===undefined||note.seconds<end)).map(note=>({...note,seconds:shiftedTime(note.seconds-start,silenceCuts)+(intro?.seconds??0)}));
         if(exportedNotes.length){notes="notes.json";await writeFile(path.join(temporary,notes),JSON.stringify(exportedNotes,null,2));}
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, excludeFromMix:options.mix?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(["audition","audacity"].includes(requestedFormat))await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);

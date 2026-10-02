@@ -275,3 +275,7 @@ For the current RackNerd host, an administrator can run `sudo bash /opt/the-witn
 For `thewitness.dev`, run `sudo bash /opt/the-witness/scripts/enable-downloads-domain.sh` instead of the IP setup. It issues a domain certificate, enables the private download service at `https://thewitness.dev`, and configures automatic renewal. Cloudflare must route the domain to this VPS and permit HTTP ACME validation; use Full (strict) TLS mode once the origin certificate is installed. The website root returns 404 by design; access recordings through signed Discord Download links.
 
 Private download pages let you choose which speaker tracks appear in mixed audio. All speakers are included by default. Excluded speakers keep their separate tracks in multi-track/project downloads, and at least one speaker must remain selected.
+
+Download pages can save a reusable intro per Discord server (WAV, FLAC, MP3, or Ogg; up to 30 MB and five minutes). Enable it per export to add a separate intro track and shift all speaker audio and notes after it. Queued exports retain the intro version selected when queued. Intro and silence-trimming options default off.
+
+“Trim pauses longer than 30 seconds” detects shared silence in the selected speakers (100 ms windows, -50 dBFS threshold), removes the whole qualifying pause, and applies identical cuts to every exported speaker track. Activity on an excluded speaker does not prevent a cut. Notes move with the edited timeline; intro audio is added afterward and is never silence-trimmed. Original recordings are preserved.

@@ -1,3 +1,4 @@
+import {getServerIntro,uploadIntroChunk} from "../exports/server-intro";
 import { recordingPage } from "./recording-page";
 import { resolveAudioFormat, ProjectTrackFormat } from "../exports/formats";
 import { transcriptionReady } from "../integrations/transcription-config";
@@ -126,14 +127,14 @@ export class DownloadService {
       const metadata=JSON.parse(await readFile(path.join(this.root,id,"session.json"),"utf8"));
       const saved=await getSession(this.root,id,metadata.guildID);
       if(saved.state!=="completed"||!saved.tracks.length)return this.error(response,400,"This recording has no completed audio tracks to download.");
-      if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady()));
+      if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady(),await getServerIntro(this.root,saved.guildID)));
       if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>4096)return this.json(response,413,{error:"Request too large."});}
+      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>800000)return this.json(response,413,{error:"Request too large."});}
       try{
-        const data=JSON.parse(body);resolveAudioFormat(data.format,data.trackFormat);
-        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
+        const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,saved.guildID,data));resolveAudioFormat(data.format,data.trackFormat);
+        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{trimSilence:data.trimSilence===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
         const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
         return this.json(response,202,{url:jobURL.toString()});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
