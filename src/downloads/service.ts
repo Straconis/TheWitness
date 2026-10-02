@@ -134,7 +134,8 @@ export class DownloadService {
       try{
         const data=JSON.parse(body);resolveAudioFormat(data.format,data.trackFormat);
         const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
-        return this.json(response,202,{url:this.jobLink(job.id)});
+        const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
+        return this.json(response,202,{url:jobURL.toString()});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
     }
     if(/^\/(browser|job|dashboard)\/[a-zA-Z0-9_-]{1,64}$/.test(url.pathname)){
@@ -154,7 +155,8 @@ export class DownloadService {
         try{const data=JSON.parse(body);if(data.action==="cancel"){await this.queue!.cancel(job.id,job.guildID);return this.json(response,200,{state:this.queue!.get(job.id)!.state});}if(data.action==="retry"){const next=await this.queue!.retry(job.id,job.guildID);return this.json(response,202,{url:this.jobLink(next.id)});}return this.json(response,400,{error:"Unknown action."});}
         catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Job action failed."});}
       }
-      const result=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
+      let result=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
+      if(result&&url.searchParams.get("mixed")==="1"&&job.mix&&!["audition","audacity"].includes(job.format)){const target=new URL(result);target.pathname+="/mix."+(job.format==="aac"?"m4a":job.format);result=target.toString();}
       if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:job.stage,url:result,error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
       return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>The Witness export</title><style>body{font:18px system-ui;max-width:680px;margin:70px auto;padding:24px;background:#101820;color:#edf2f7}a{color:#9dd9ff}</style><h1>Your export</h1><p id="status">Preparing your recording…</p><button id="cancel" hidden>Cancel export</button><button id="retry" hidden>Retry export</button><p>Cancellation preserves your recording. Files already uploaded are not deleted.</p><script>async function check(){try{const response=await fetch(location.href,{headers:{Accept:'application/json'}});if(!response.ok)throw Error('Link unavailable');const data=await response.json();const status=document.querySelector('#status');status.textContent=data.state+' — '+(data.stage||'Waiting');document.querySelector('#cancel').hidden=!['queued','running'].includes(data.state);document.querySelector('#retry').hidden=!['failed','cancelled'].includes(data.state);if(data.url){const link=document.createElement('a');link.href=data.url;link.textContent='Open downloads';status.replaceChildren(link);}else if(['failed','cancelled'].includes(data.state)){status.textContent=data.error||'Export cancelled.';}else setTimeout(check,2000);}catch(error){document.querySelector('#status').textContent=error.message;}}for(const action of ['cancel','retry'])document.querySelector('#'+action).onclick=async()=>{try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});const data=await response.json();if(!response.ok)throw Error(data.error);if(data.url)location.href=data.url;else check();}catch(error){document.querySelector('#status').textContent=error.message;}};check();</script></html>`);
     }
