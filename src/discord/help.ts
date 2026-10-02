@@ -1,7 +1,7 @@
 export const helpTopics = [
   {value:"start",name:"Quick start",description:"Record, stop, find your session, and download it"},
   {value:"recording",name:"Recording & notes",description:"Voice recording, titles, notes, and live controls"},
-  {value:"exports",name:"Exports & formats",description:"Projects, audio formats, mixed audio, and export jobs"},
+  {value:"exports",name:"Exports & formats",description:"Projects, speaker selection, intros, silence trimming, and jobs"},
   {value:"downloads",name:"Downloads & browser tools",description:"ZIP names, private links, dashboard, and browser microphone"},
   {value:"automation",name:"Automatic recording",description:"Autojoin, events, schedules, and channel rules"},
   {value:"permissions",name:"Permissions & privacy",description:"Bot Wrangler roles, server settings, and deletion"},
@@ -30,10 +30,15 @@ const pages:Record<string,string>={
   "The live recording panel offers **Status**, **Add note**, and **Stop**. If it cannot appear in channel chat, slash commands still work."
  ].join("\n\n"),
  exports:[
-  "**`/export session:<session-id> [format] [mix] [transcribe] [upload]`** — Export a **completed** recording. Get its ID with `/recordings`; recover interrupted recordings first.",
+  "**`/export session:<session-id> [format] [track_format] [mix] [transcribe] [upload]`** — Export a **completed** recording. Get its ID with `/recordings`; recover interrupted recordings first.",
   "**Formats:** `audition` (default): ZIP with an Audition session and FLAC media. `audacity`: ZIP with an import project and WAV media. `ogg`, `wav`, `flac`, `mp3`, `aac`: individual speaker audio; AAC files use `.m4a`.",
-  "**Example:** `/export session:<session-id> format:flac mix:true` adds mixed session audio alongside separate tracks.",
+  "**Example:** `/export session:<session-id> format:flac mix:true` adds a mixdown of the synchronized speaker tracks alongside the separate tracks. For a project, `format:audition track_format:wav` chooses WAV media instead of its FLAC default; Audacity defaults to WAV and also supports FLAC.",
   "With web downloads enabled, open the returned status link and wait for **Ready**. Otherwise, exports attach in Discord with an 8 MiB limit. Web audio exports offer individual files; project formats provide a ZIP.",
+  "**Private download page:** Multi-track buttons keep speakers separate; Single-track buttons download the combined mixdown. The ZIP media dropdown chooses FLAC, WAV, or the project default.",
+  "**Choose speakers for the mixdown:** Uncheck someone (for example, Zelvik) to exclude their voice from mixed audio. Their separate track remains available in multi-track/project exports. Keep at least one speaker selected.",
+  "**Trim pauses longer than 30 seconds:** Optional and off by default. Cuts the entire pause when all selected speakers are silent (below -50 dBFS); excluded speakers do not prevent a cut. The same cuts apply to all exported speaker tracks, and notes move with the timeline. The original recording stays intact.",
+  "**Server intro:** Upload a reusable WAV, FLAC, MP3, or Ogg intro (up to 30 MB / five minutes) on the recording download page. It is saved for this server. Enable Add intro before the session audio for an export; speaker tracks and notes start after it. Projects include a separate intro track. Silence trimming does not cut the intro. This option defaults off.",
+  "Speaker selection, reusable intro uploads, and shared-silence trimming are available on the recording download page. `/export` can still choose formats, project track format, and mixed audio.",
   "**`/exportjob action:status job:<job-id>`** — Check progress. Use `action:cancel` to cancel or `action:retry` for a failed/cancelled job. Copy the job ID from the queued-export response. Cancellation preserves the original recording; cloud files already uploaded remain.",
   "`transcribe:true` needs the configured local speech engine/model. `upload:dropbox|google|onedrive|box` needs a connected owner cloud account. Both require the web export service. Exports share a processing queue across servers."
  ].join("\n\n"),
@@ -44,6 +49,7 @@ const pages:Record<string,string>={
   "Dates use the **recording start in UTC**. Channel names are saved when new recordings start; older recordings can fall back to a channel ID. Same-day exports can have the same download name. Individual tracks keep detailed filenames.",
   "**`/dashboard`** — Open this server's private session dashboard: rename recordings, prepare exports, recover audio, and manage settings. Web downloads must be enabled by the host operator.",
   "**`/webapp`** — Get a private browser microphone link for the **active** recording. Allow microphone access in the browser; web recording must be enabled by the host operator.",
+  "Click Download on a completed recording card to open its format page. Use the Multi-track or Single-track buttons, the project ZIP media dropdown, and the optional speaker selection, intro, and silence-trim controls. Finished download pages offer Choose another format or mixdown speakers to return there.",
   "On a private download page you can audition tracks, open the multitrack editor, and prepare excerpts. Excerpts preserve the original recording.",
   "Private links expire (check the expiry shown on the page). Anyone holding a link can use it while valid; share it only with your group."
  ].join("\n\n"),
@@ -71,6 +77,8 @@ const pages:Record<string,string>={
   "**Interrupted or failed recording?** Run `/recordings`, copy its ID, then `/recover session:<session-id>`. Recovery preserves the original files and returns a **new session ID**; export that recovered session.",
   "**Export unavailable or failed?** Use a completed session from this server. For queued exports, inspect `/exportjob action:status job:<job-id>` and retry failed jobs with `action:retry`. An attachment above 8 MiB needs the host's web download service.",
   "**Dashboard/browser link unavailable?** The host operator must enable the web download service. Browser microphone capture needs microphone permission and a supported secure browser page.",
+  "**Intro upload failed?** Use WAV, FLAC, MP3, or Ogg audio under 30 MB and five minutes. Keep the page open until Server intro saved appears. Changing the saved intro affects future exports; already queued exports retain their selected intro version.",
+  "**Silence trim removed everything?** At least one selected speaker needs audible audio. Select another speaker or turn trimming off. Unselected speakers cannot keep a quiet section in the export.",
   "**Private link expired?** Request a new dashboard, microphone, or export link through the corresponding command.",
   "**Low disk space?** Ask the host operator to review storage. A manager can delete selected saved sessions or opt into retention; deletion is permanent.",
   "**Update being prepared?** New recordings/exports pause while deployment waits for existing work to finish. Try again after the update completes. For unresolved problems, give the host operator the session/job ID and the error message."
