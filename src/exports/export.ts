@@ -1,3 +1,4 @@
+import {validateMixExclusions} from "./mix-selection";
 import {resolveAudioFormat,ProjectTrackFormat} from "./formats";
 import { exportEdited } from "./edited-export";
 import { AudioEdits,validateEdits,renderEdits } from "./edits";
@@ -15,7 +16,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity";
-export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; mix?: boolean; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
+export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
@@ -100,8 +101,10 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     let mix: string | undefined;
     if (options.mix) {
       mix = `mix.${format==="aac"?"m4a":format}`;
-      const inputs = manifest.flatMap(track => ["-i",path.join(temporary,track.file)]);
-      await convert([...inputs,"-filter_complex",`amix=inputs=${metadata.tracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options),options.signal);
+      const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track));
+      const mixedTracks=manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1])));
+      const inputs = mixedTracks.flatMap(track => ["-i",path.join(temporary,track.file)]);
+      await convert([...inputs,"-filter_complex",`amix=inputs=${mixedTracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options),options.signal);
     }
     if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
@@ -116,7 +119,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, excludeFromMix:options.mix?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(["audition","audacity"].includes(requestedFormat))await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);

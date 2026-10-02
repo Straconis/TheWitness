@@ -1,3 +1,4 @@
+import {validateMixExclusions} from "./mix-selection";
 import {resolveAudioFormat} from "./formats";
 import { mkdir,readFile,writeFile,rename,rm,realpath } from "node:fs/promises";
 import path from "node:path";
@@ -24,7 +25,7 @@ export async function exportEdited(root:string,sessionID:string,options:ExportOp
    if(!edit)throw Error("Every source track needs editor settings.");
    await renderEdits(input,path.join(temporary,file),edit,options.edits!.tracks.some(track=>track.solo),codec,ffmpeg,options.signal);tracks.push({file,userID:track.userID,username:edit.name||track.username});
   }
-  let mix:string|undefined;if(options.mix){mix=`mix.${format==="aac"?"m4a":format}`;await runTool(ffmpeg,["-nostdin","-v","error","-n",...tracks.flatMap(track=>["-i",path.join(temporary,track.file)]),"-filter_complex",`amix=inputs=${tracks.length}:duration=longest:normalize=0`,"-c:a",codec,...(format==="wav"?["-rf64","auto"]:[]),...(format==="aac"?["-f","mp4"]:[]),path.join(temporary,mix)],options.signal);}
+  let mix:string|undefined;if(options.mix){const excluded=validateMixExclusions(options.excludeFromMix,tracks.map(track=>Number(/^track-(\d+)/.exec(track.file)![1]))),mixedTracks=tracks.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1])));mix=`mix.${format==="aac"?"m4a":format}`;await runTool(ffmpeg,["-nostdin","-v","error","-n",...mixedTracks.flatMap(track=>["-i",path.join(temporary,track.file)]),"-filter_complex",`amix=inputs=${mixedTracks.length}:duration=longest:normalize=0`,"-c:a",codec,...(format==="wav"?["-rf64","auto"]:[]),...(format==="aac"?["-f","mp4"]:[]),path.join(temporary,mix)],options.signal);}
   const notes=options.edits!.notes??[];if(notes.length)await writeFile(path.join(temporary,"notes.json"),JSON.stringify(notes,null,2));
   if(requested==="audition")await writeAudition(temporary,tracks,notes,manifest.title);if(requested==="audacity")await writeAudacity(temporary,tracks,notes);
   await writeFile(path.join(temporary,"manifest.json"),JSON.stringify({sessionID,guildID:metadata.guildID,startedAt:metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID,title:manifest.title,format:requested,trackFormat:["audition","audacity"].includes(requested)?format:undefined,tracks,mix,notes:notes.length?"notes.json":undefined,project:["audition","audacity"].includes(requested)?"project.zip":undefined,sourceExport:options.sourceExport,edits:options.edits},null,2));
