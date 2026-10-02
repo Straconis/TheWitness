@@ -66,7 +66,7 @@ export class DownloadService {
     try{
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
-        if(data.downloadNaming!==undefined&&!["date","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
+        if(data.downloadNaming!==undefined&&!["date","date-channel","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
         await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {})});return this.json(response,200,{saved:true});
       }
       if(data.action==="title"){await this.manager.exclusive(guildID,async()=>{const active=this.manager!.sessions.get(guildID);if(active&&active.id===data.session)await active.setTitle(data.title);else await renameSession(this.root,data.session,guildID,data.title);});return this.json(response,200,{saved:true});}
@@ -152,8 +152,13 @@ export class DownloadService {
     if (manifest.mix && !/^mix\.(ogg|wav|flac|mp3|m4a)$/.test(manifest.mix)) throw new Error("Invalid mixed file.");
     if (manifest.notes && manifest.notes !== "notes.json") throw new Error("Invalid notes file.");
     if(manifest.project&&manifest.project!=="project.zip")throw new Error("Invalid project file.");
+    // Older exports predate channel metadata; read it from the authorized source session.
+    if(manifest.guildID&&(!manifest.channelName||!manifest.channelID)){
+      try{const source=await getSession(this.root,parts[2]!,manifest.guildID);manifest.channelName??=source.channelName;manifest.channelID??=source.channelID;}
+      catch{ /* Existing authorized downloads remain usable if source metadata is unavailable. */ }
+    }
     const requestedNaming=url.searchParams.get("names");
-    const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
+    const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="date-channel"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
     const filename = parts[4];
     if(!filename&&request.method==="GET"&&url.searchParams.get("view")==="editor"){
       const waves:Record<string,unknown>={};for(const track of manifest.tracks){const id=/^track-(\d+)\./.exec(track.file)?.[1];if(!id)throw Error("Invalid editor track.");waves[id]=await waveform(path.join(directory,track.file));}
@@ -186,8 +191,8 @@ export class DownloadService {
     if (!filename) {
       const downloadSearch=new URLSearchParams(url.searchParams);downloadSearch.set("names",naming);
       const query="?"+escapeHTML(downloadSearch.toString());
-      const toggle=new URLSearchParams(downloadSearch);toggle.set("names",naming==="date"?"original":"date");
-      const namesToggle=`<p>Download names: ${naming==="date"?"recording date/time (UTC)":"original filenames"}. <a href="${route}?${escapeHTML(toggle.toString())}">Switch to ${naming==="date"?"original filenames":"date/time names"}</a></p>`;
+      const namingOptions:Array<[DownloadNaming,string]>=[["date","Date only (UTC)"],["date-channel","Date + channel (UTC)"],["original","Original filenames"]];
+      const namesToggle=`<p>ZIP download names: ${namingOptions.map(([style,label])=>{const search=new URLSearchParams(downloadSearch);search.set("names",style);return style===naming?`<strong>${label}</strong>`:`<a href="${route}?${escapeHTML(search.toString())}">${label}</a>`;}).join(" · ")}</p>`;
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="none" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
       const extras = [[manifest.project,"Download project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
       const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<p><a href="${route}${query}&amp;editor=1">Open multitrack editor</a></p><ul>${extras}${links}</ul>${this.queue?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","audacity","ogg","wav","flac","mp3","aac"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;

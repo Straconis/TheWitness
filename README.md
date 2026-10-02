@@ -141,18 +141,22 @@ live verification; see `.env.example`. Full Craig parity is still tracked in
 ## Audition projects and readable download names
 
 `/export` defaults to an Audition project. Choose `format:audition` explicitly to download a ZIP containing
-`session.sesx` and separate, aligned 48 kHz WAV tracks. Extract the entire ZIP
-into one folder, then open `session.sesx` in Audition. WAV files are the session's
+`session.sesx` and separate, aligned 48 kHz FLAC tracks. Extract the entire ZIP
+into one folder, then open `session.sesx` in Audition. FLAC files are the session's
 linked media; keep them beside the session file. Track labels use participant
 names. The session generator follows Craig's SESX structure. Local checks verify
 XML, references, clip lengths and ZIP integrity; opening it in Adobe Audition
 is still pending. ZIP64 packaging streams from disk for large projects.
 
-Download names default to the recording start date/time in UTC. Use
-`/downloadnames style:date` or `style:original` to save your server preference.
+ZIP download names default to the recording start date in UTC (`YYYY-MM-DD.zip`).
+Use `/downloadnames style:date-channel` for `YYYY-MM-DD-channel-name.zip`,
+`style:date` for date only, or `style:original` for original filenames.
+New recordings save the channel name at recording start; older recordings fall back
+to their channel ID. Same-day exports can share a download filename; storage remains
+separate and browsers handle duplicate downloads. Individual files keep their detailed names.
 The dashboard exposes the same setting, and each download page has a naming
 toggle. Changing names preserves private URL authorization and source files.
-Clipped exports add their selected range to readable filenames. The Audition
+Clipped individual-file exports add their selected range to readable filenames. The Audition
 ZIP uses readable naming too; names inside the project ZIP stay stable so the
 session's media references keep working.
 

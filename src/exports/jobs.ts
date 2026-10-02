@@ -1,3 +1,4 @@
+import { assertDeploymentIdle } from "../storage/deployment";
 import { transcriptionConfig,transcriptionReady } from "../integrations/transcription-config";
 import { AudioEdits,validateEdits } from "./edits";
 import { CloudAccounts } from "../integrations/accounts";
@@ -29,6 +30,7 @@ export class ExportQueue {
  }
  enqueue(sessionID:string,guildID:string,format:ExportFormat,mix=false,extras:Extras={}):Promise<ExportJob>{const task=this.submissions.catch(()=>{}).then(()=>this.submit(sessionID,guildID,format,mix,extras));this.submissions=task;return task;}
  private async submit(sessionID:string,guildID:string,format:ExportFormat,mix:boolean,extras:Extras):Promise<ExportJob>{
+  await assertDeploymentIdle(this.root);
   if(this.stopped)throw new Error("Export service is stopping.");if(this.deleting.has(sessionID))throw Error("This recording is being deleted.");const session=await getSession(this.root,sessionID,guildID);if(session.state!=="completed")throw new Error("Only completed recordings can be exported.");
   if(!["ogg","wav","flac","mp3","aac","audition","audacity"].includes(format))throw new Error("Invalid export format.");
   if(extras.edits)validateEdits(extras.edits,session.tracks.map(track=>track.track));

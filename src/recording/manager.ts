@@ -1,3 +1,4 @@
+import { assertDeploymentIdle } from "../storage/deployment";
 import { EventEmitter } from "node:events";
 import type Eris from "eris";
 import { setTimeout as delay } from "node:timers/promises";
@@ -19,7 +20,8 @@ export class RecordingManager {
  async start(guild:Eris.Guild,channelID:string,connection:Eris.VoiceConnection,connector?:Connector):Promise<RecordingSession>{
   const existing=this.sessions.get(guild.id);
   if(existing){if(existing.channelID!==channelID)throw new Error("Stop the existing recording before changing channels.");return existing;}
-  const session=await RecordingSession.create(this.root,guild.id,channelID);
+  await assertDeploymentIdle(this.root);
+  const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name);
   try{this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);return session;
  }

@@ -1,8 +1,8 @@
 const test=require('node:test');const assert=require('node:assert/strict');const {mkdtemp,mkdir,readFile,writeFile,rm}=require('node:fs/promises');const os=require('node:os');const path=require('node:path');const {spawnSync}=require('node:child_process');const {OpusEncoder}=require('@discordjs/opus');const {RecordingSession}=require('../dist/recording/session');const {exportSession}=require('../dist/exports/export');const {DownloadService}=require('../dist/downloads/service');const {SettingsStore}=require('../dist/storage/settings');const {ExportQueue}=require('../dist/exports/jobs');const {RecordingManager}=require('../dist/recording/manager');const {downloadName}=require('../dist/downloads/names');
-test('Audition project ZIP contains valid XML, linked WAV tracks and exact clip lengths',async()=>{
+test('Audition project ZIP contains valid XML, linked FLAC tracks and exact clip lengths',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-audition-'));
  try{const session=await RecordingSession.create(root,'guild','voice');const encoder=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840);for(let frame=0;frame<20;frame++){await session.append(encoder.encode(pcm),'one','Alice & <friends>',frame*960,BigInt(frame*960),pcm);if(frame<15)await session.append(encoder.encode(pcm),'two','Bob',frame*960,BigInt(frame*960),pcm);}await session.close();const output=await exportSession(root,session.id,{format:'audition'});const manifest=JSON.parse(await readFile(path.join(output,'manifest.json')));assert.equal(manifest.format,'audition');assert.equal(manifest.project,'project.zip');
- const result=spawnSync('python3',['-c',`import zipfile,xml.etree.ElementTree as ET,wave,io,sys
+ const result=spawnSync('python3',['-c',`import zipfile,xml.etree.ElementTree as ET,sys
 with zipfile.ZipFile(sys.argv[1]) as z:
  assert z.testzip() is None
  root=ET.fromstring(z.read('session.sesx'))
@@ -12,16 +12,19 @@ with zipfile.ZipFile(sys.argv[1]) as z:
  assert root.find('session').get('duration')=='19200'
  for t,f in zip(tracks,files):
   clip=t.find('audioClip'); assert clip.get('fileID')==f.get('id'); assert clip.get('startPoint')=='0'
-  with wave.open(io.BytesIO(z.read(f.get('relativePath')))) as w:
-   assert w.getframerate()==48000 and w.getnchannels()==2
-   assert int(clip.get('endPoint'))==w.getnframes()
+  assert f.get('relativePath').endswith('.flac')
+  data=z.read(f.get('relativePath')); assert data[:4]==b'fLaC'
+  packed=int.from_bytes(data[18:26],'big')
+  assert packed>>44==48000 and ((packed>>41)&7)+1==2
+  assert int(clip.get('endPoint'))==packed&0xfffffffff
+ assert not any(name.endswith('.wav') for name in z.namelist())
 `,path.join(output,'project.zip')],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 test('date naming persists, toggles without invalidating signed links, and leaves file bytes unchanged',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-names-')),settings=new SettingsStore(path.join(root,'settings.json')),queue=new ExportQueue(root),manager=new RecordingManager(root);let service;
  try{await settings.load();await settings.update('guild',{downloadNaming:'date'});const restarted=new SettingsStore(path.join(root,'settings.json'));await restarted.load();assert.equal(restarted.get('guild').downloadNaming,'date');
- const id='11111111-1111-4111-8111-111111111111',exp='export-22222222-2222-4222-8222-222222222222',directory=path.join(root,id,exp);await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'track-1.wav'),'audio');await writeFile(path.join(directory,'manifest.json'),JSON.stringify({sessionID:id,guildID:'guild',startedAt:'2026-09-30T22:45:12Z',format:'wav',tracks:[{file:'track-1.wav',username:'Alice'}]}));service=await DownloadService.create(root,'http://localhost');service.attach(queue,settings,manager);const port=await service.listen(0,'127.0.0.1'),base=service.link(id,exp).replace('http://localhost',`http://127.0.0.1:${port}`);const page=await (await fetch(base)).text();assert.ok(page.includes('Switch to original filenames'));assert.ok(page.includes('2026-09-30_22-45-12_UTC_Alice_track-1.wav'));
+ const id='11111111-1111-4111-8111-111111111111',exp='export-22222222-2222-4222-8222-222222222222',directory=path.join(root,id,exp);await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'track-1.wav'),'audio');await writeFile(path.join(directory,'manifest.json'),JSON.stringify({sessionID:id,guildID:'guild',startedAt:'2026-09-30T22:45:12Z',format:'wav',tracks:[{file:'track-1.wav',username:'Alice'}]}));service=await DownloadService.create(root,'http://localhost');service.attach(queue,settings,manager);const port=await service.listen(0,'127.0.0.1'),base=service.link(id,exp).replace('http://localhost',`http://127.0.0.1:${port}`);const page=await (await fetch(base)).text();assert.ok(page.includes('names=original') && page.includes('Date + channel (UTC)'));assert.ok(page.includes('2026-09-30_22-45-12_UTC_Alice_track-1.wav'));
  const file=new URL(base);file.pathname+='/track-1.wav';const date=await fetch(file);assert.equal(date.headers.get('content-disposition'),'attachment; filename="2026-09-30_22-45-12_UTC_Alice_track-1.wav"');assert.equal(await date.text(),'audio');file.searchParams.set('names','original');const original=await fetch(file);assert.equal(original.headers.get('content-disposition'),'attachment; filename="track-1.wav"');assert.equal(await original.text(),'audio');
  const dashboard=service.dashboardLink('guild').replace('http://localhost',`http://127.0.0.1:${port}`);const saved=await fetch(dashboard,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'settings',autoJoin:false,autoRecord:false,downloadNaming:'original'})});assert.equal(saved.status,200);await saved.text();assert.equal(settings.get('guild').downloadNaming,'original');
  }finally{await service?.close();await queue.close();await manager.shutdown();await rm(root,{recursive:true,force:true});}

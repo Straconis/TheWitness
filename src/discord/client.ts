@@ -40,7 +40,7 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       {type:1,name:"eventrecord",description:"Opt into recording a selected Discord voice event.",options:[{type:3,name:"mode",description:"Event recording rule",required:true,choices:[{name:"Enable",value:"enable"},{name:"Disable",value:"disable"},{name:"Show rules",value:"status"}]},{type:3,name:"event",description:"Discord event ID or event link"},{type:5,name:"stop_on_end",description:"Also stop this event's recording when the event ends (default off)"}]},
       {type:1,name:"access",description:"Manage who may use The Witness (Manage Server required).",options:[{type:3,name:"mode",description:"Access policy",required:true,choices:[{name:"Everyone",value:"everyone"},{name:"Bot Wrangler role",value:"role"},{name:"Show current policy",value:"status"}]},{type:8,name:"role",description:"Role allowed to control the bot (required for role mode)"}]},
       {type:1,name:"title",description:"Name the active recording or a saved session.",options:[{type:3,name:"text",description:"Recording title",required:true,max_length:120},{type:3,name:"session",description:"Saved session ID (omit for the active recording)"}]},
-      {type:1,name:"downloadnames",description:"Choose recording date/time or original download filenames.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Recording date/time (UTC)",value:"date"},{name:"Original filenames",value:"original"}]}]},
+      {type:1,name:"downloadnames",description:"Choose date, date + channel, or original ZIP names.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Date only (UTC)",value:"date"},{name:"Date + channel (UTC)",value:"date-channel"},{name:"Original filenames",value:"original"}]}]},
       { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
       { type:1,name:"webapp",description:"Get a private browser microphone link for the current recording." },
       { type:1,name:"dashboard",description:"Open the private recording dashboard for this server." },
@@ -343,9 +343,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
     if(commandName==="downloadnames"){
       const style=interaction.data?.options?.find((option:any)=>option.name==="style")?.value;
-      if(!["date","original"].includes(style))throw new Error("Invalid naming style.");
+      if(!["date","date-channel","original"].includes(style))throw new Error("Invalid naming style.");
       await interaction.defer(64);await settingsStore.update(guildID,{downloadNaming:style});
-      await interaction.editOriginalMessage({content:`Download names now use ${style==="date"?"the recording start date/time (UTC)":"original filenames"}. You can also switch styles on each download page.`});return;
+      await interaction.editOriginalMessage({content:`Download names now use ${style==="date"?"the recording start date (UTC)":style==="date-channel"?"the recording start date + channel (UTC)":"original filenames"}. You can also switch styles on each download page.`});return;
     }
     if(commandName==="delete"){
       const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="session")?.value;
@@ -424,7 +424,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           return;
         }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
-        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,title:sourceSession.title},settings.downloadNaming??"date") }] });
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,title:sourceSession.title,channelName:sourceSession.channelName,channelID:sourceSession.channelID},settings.downloadNaming??"date") }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")

@@ -110,7 +110,7 @@ Audacity export uses Craig's legacy `.aup` import-project structure with a
 `session_data` folder. Extract the whole ZIP and open `session.aup`; save in the
 installed Audacity version's native format afterward. This is not an AUP3/AUP4
 file generator. Audacity version compatibility needs verification.
-Audition uses `.sesx` with linked WAVs and XMP cue markers. AAC exports use `.m4a`.
+Audition uses `.sesx` with linked FLAC tracks and XMP cue markers. AAC exports use `.m4a`.
 
 ## Optional automation
 

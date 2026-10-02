@@ -1,7 +1,7 @@
 import { validateSchedule,RecordingSchedule } from "../automation/schedules";
 import { validateAccess } from "../discord/access";
 import { readFile, writeFile, rename } from "node:fs/promises";
-export interface GuildSettings { schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
+export interface GuildSettings { schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
 function validateEvents(settings:GuildSettings):void{
  if(settings.retentionDays!==undefined&&(!Number.isInteger(settings.retentionDays)||settings.retentionDays<0||settings.retentionDays>3650))throw Error("Retention must be 0 (off) or 1–3650 days.");
  if(settings.autoJoinChannels!==undefined&&(!Array.isArray(settings.autoJoinChannels)||settings.autoJoinChannels.length>100||settings.autoJoinChannels.some(id=>!/^\d{1,25}$/.test(id))))throw Error("Invalid autojoin channel list.");
@@ -21,7 +21,7 @@ export class SettingsStore {
         const settings = value as GuildSettings;
         if (typeof settings.autoJoin !== "boolean" || typeof settings.autoRecord !== "boolean") throw new Error("Invalid saved automation settings.");
         validateAccess(settings);validateEvents(settings);
-        if(settings.downloadNaming!==undefined&&!["date","original"].includes(settings.downloadNaming))throw new Error("Invalid download naming setting.");
+        if(settings.downloadNaming!==undefined&&!["date","date-channel","original"].includes(settings.downloadNaming))throw new Error("Invalid download naming setting.");
       }
       this.values = data;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -30,7 +30,7 @@ export class SettingsStore {
   get(id:string):GuildSettings{return structuredClone(this.values[id]??{autoJoin:false,autoRecord:false});}
   update(id: string, change: Partial<GuildSettings>): Promise<void> {
     const task = this.queue.then(async () => {
-      if(change.downloadNaming!==undefined&&!["date","original"].includes(change.downloadNaming))throw new Error("Invalid download naming setting.");
+      if(change.downloadNaming!==undefined&&!["date","date-channel","original"].includes(change.downloadNaming))throw new Error("Invalid download naming setting.");
       const next = { ...this.values, [id]: { ...this.get(id), ...structuredClone(change) } };
       validateAccess(next[id]);validateEvents(next[id]);
       await writeFile(this.file + ".tmp", JSON.stringify(next,null,2));

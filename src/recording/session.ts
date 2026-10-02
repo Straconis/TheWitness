@@ -33,12 +33,12 @@ export class RecordingSession {
   private accepting = true;
   private failure?: Error;
 
-  private constructor(root: string, readonly guildID: string, readonly channelID: string) {
+  private constructor(root: string, readonly guildID: string, readonly channelID: string, readonly channelName?: string) {
     this.directory = path.join(root, this.id);
   }
 
-  static async create(root: string, guildID: string, channelID: string): Promise<RecordingSession> {
-    const session = new RecordingSession(root, guildID, channelID);
+  static async create(root: string, guildID: string, channelID: string, channelName?: string): Promise<RecordingSession> {
+    const session = new RecordingSession(root, guildID, channelID, channelName);
     await mkdir(session.directory, { recursive: true });
     try {
       for (const name of ["header1", "header2", "data", "users", "notes"]) {
@@ -48,7 +48,7 @@ export class RecordingSession {
       await writeFile(path.join(session.directory, "audio.ogg.info"), JSON.stringify({
         format: 1, guild: guildID, channel: channelID,
         guildExtra: { id: guildID, name: guildID },
-        channelExtra: { id: channelID, name: channelID, type: 2 },
+        channelExtra: { id: channelID, name: channelName ?? channelID, type: 2 },
         startTime: session.startedAt, features: recordingFeatures
       }, null, 2));
       await session.metadata();
@@ -72,7 +72,7 @@ export class RecordingSession {
   private async metadata(endedAt?: string): Promise<void> {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
-      id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID,
+      id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID, channelName: this.channelName,
       startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats,
       error: this.failure?.message, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));

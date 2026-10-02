@@ -1,0 +1,44 @@
+name: Test and deploy The Witness
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: witness-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install build and audio tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential ffmpeg
+      - run: npm ci
+      - name: Build and test
+        run: |
+          mkdir -p bin
+          ln -s /usr/bin/ffmpeg bin/ffmpeg
+          npm test
+      - name: Package release
+        run: |
+          npm prune --omit=dev
+          tar -czf /tmp/witness-release.tar.gz dist node_modules bin/oggcorrect package.json package-lock.json src scripts cook licenses LICENSE README.md docs
+      - name: Deploy tested release over SSH
+        env:
+          VPS_KEY: ${{ secrets.WITNESS_VPS_SSH_KEY }}
+          VPS_HOST_KEYS: ${{ secrets.WITNESS_VPS_KNOWN_HOSTS }}
+        run: |
+          test -n "$VPS_KEY" && test -n "$VPS_HOST_KEYS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/witness_deploy
+          printf '%s\n' "$VPS_HOST_KEYS" > ~/.ssh/known_hosts
+          { printf '%s\n' "$GITHUB_SHA"; cat /tmp/witness-release.tar.gz; } |
+            ssh -i ~/.ssh/witness_deploy -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 straconis@198.44.123.167 deploy

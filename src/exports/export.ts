@@ -55,7 +55,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   if(options.sourceExport)return exportEdited(root,sessionID,options);
   options.signal?.throwIfAborted();
   const requestedFormat=options.format??"ogg";
-  const format=requestedFormat==="audition"||requestedFormat==="audacity"?"wav":requestedFormat;
+  const format=requestedFormat==="audition"?"flac":requestedFormat==="audacity"?"wav":requestedFormat;
   if (!["ogg", "wav", "flac", "mp3", "aac"].includes(format)) throw new Error("Unsupported export format.");
   const start=options.trimStart??0,end=options.trimEnd;
   if(!Number.isFinite(start)||start<0||(end!==undefined&&(!Number.isFinite(end)||end<=start)))throw new Error("Invalid trim range.");
@@ -115,7 +115,7 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, title:metadata.title, edits:options.edits, format:requestedFormat, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, project:["audition","audacity"].includes(requestedFormat)?"project.zip":undefined, tracks: manifest, mix, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(["audition","audacity"].includes(requestedFormat))await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);
