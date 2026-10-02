@@ -2,12 +2,12 @@
 
 # The Witness
 
-The Witness is a private multitrack Discord recording package based on Craig, intended to run on bot-hosting.net for the owner and friends.
+The Witness is a self-hosted multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. It runs on a RackNerd VPS with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
 
 ## Goals
 
 - Per-user multitrack Discord voice recording
-- Hosted on bot-hosting.net
+- Self-hosted on a VPS with automatic deployment from GitHub
 - All implemented features available without premium tiers
 - No artificial recording-duration limits
 - No plugin marketplace architecture
