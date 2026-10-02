@@ -21,7 +21,7 @@ export async function transcribeExport(directory:string,options:{executable:stri
  for(const track of manifest.tracks){
   const input=path.join(directory,track.file),temporary=path.join(directory,"transcription-input.wav"),output=path.join(directory,"transcription-result");
   // Five-minute chunks bound model memory and preserve per-speaker timestamps.
-  for(let offset=0;;offset+=300){
+  for(let offset=track.userID!=="server-intro" ? Number(manifest.intro?.seconds??0) : 0;;offset+=300){
    options.signal?.throwIfAborted();
    try{
     await runTool(options.ffmpeg,["-nostdin","-v","error","-n","-ss",String(offset),"-i",input,"-t","300","-ar","16000","-ac","1","-c:a","pcm_s16le",temporary],options.signal,options.timeoutMs);
@@ -33,8 +33,11 @@ export async function transcribeExport(directory:string,options:{executable:stri
     if(!Array.isArray(result.transcription))throw new Error("Invalid whisper.cpp output.");
     for(const item of result.transcription){
      const start=item.offsets?.from/1000,end=item.offsets?.to/1000;
-     if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||end>audioBytes/32000+1||typeof item.text!=="string")throw new Error("Invalid transcript segment.");
-     if(item.text.trim())segments.push({start:start+offset,end:end+offset,text:item.text,speaker:track.username});
+     if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||typeof item.text!=="string")throw new Error("Invalid transcript segment.");
+     // Whisper can extend its final timestamp beyond the actual chunk.
+     // Bound subtitles to the audio instead of failing the entire export.
+     const duration=audioBytes/32000;
+     if(start<duration&&end>start&&item.text.trim())segments.push({start:start+offset,end:Math.min(end,duration)+offset,text:item.text,speaker:track.username});
     }
     if(audioBytes<300*32000)break;
    }finally{await rm(temporary,{force:true});await rm(output+".json",{force:true});}
