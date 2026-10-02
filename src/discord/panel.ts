@@ -20,8 +20,8 @@ export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now()
  ];
  if(lowSpace)fields.push({name:"⚠️ Low disk space",value:"Recording storage is running low. Ask the host operator to review available space."});
  if(context.serverName)fields.unshift({name:"Server",value:context.serverName.replace(/[\\`*_~|]/g,"\\$&").slice(0,256)});
- if(session.state==="completed")fields.push({name:"Downloads",value:session.tracks.size?"Use Download to open your private recording page and choose export formats there.":"No audio was captured, so there are no speaker tracks to download."});
- const downloadControls=session.state==="completed"?[{type:1,components:[{type:2,style:1,label:"Download",custom_id:`witness:download:${session.id}`,disabled:!session.tracks.size}]}]:[];
+ if(session.state==="completed")fields.push({name:"Downloads",value:session.tracks.size?"Choose Open Downloads to configure your export and select a file format.":"No audio was captured, so there are no speaker tracks to download."});
+ const downloadControls=session.state==="completed"?[{type:1,components:[{type:2,style:1,label:"Open Downloads",custom_id:`witness:download:${session.id}`,disabled:!session.tracks.size}]}]:[];
  return {content:"",embeds:[{title:state,description:title?`**${title}**`:"Untitled recording",color,fields,...(context.serverIcon?{thumbnail:{url:context.serverIcon}}:{}),footer:{text:"The Witness remembers."}}],allowedMentions:{parse:[]},components:[{type:1,components:[{type:2,style:2,label:'Status',custom_id:`witness:status:${session.id}`,disabled:!active},{type:2,style:1,label:'Add note',custom_id:`witness:note:${session.id}`,disabled:!active},{type:2,style:4,label:'Stop',custom_id:`witness:stop:${session.id}`,disabled:!active}]},...downloadControls]};
 }
 /** Uses bot message edits, so long recordings do not depend on expiring interaction tokens. */
