@@ -28,8 +28,10 @@ export const recordings = new RecordingManager(config.recordingPath,undefined,se
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
 let recordingPanels:RecordingPanels|undefined;
+let eventRecorder:EventRecording|undefined;
+let eventOccupancyTimer:NodeJS.Timeout|undefined;
 let scheduleRunner:ScheduleRunner|undefined;
-export async function closeRecordingPanels():Promise<void>{await scheduleRunner?.close();await recordingPanels?.close();}
+export async function closeRecordingPanels():Promise<void>{if(eventOccupancyTimer)clearInterval(eventOccupancyTimer);await eventRecorder?.close();await scheduleRunner?.close();await recordingPanels?.close();}
 const exportJobs = new Set<string>();
 
 async function registerCommands(client: Eris.Client): Promise<void> {
@@ -176,7 +178,18 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const session=await recordings.start(guild,event.channelID,connection,()=>client.joinVoiceChannel(event.channelID!,{opusOnly:true,selfDeaf:false}));
     await session.setTitle(event.name.replace(/[\x00-\x1f\x7f]/g," ").trim().slice(0,120)||"Discord event");
     await panels.ensure(event.channelID,session).catch(error=>console.warn("[Event panel]",error));return session.id;
-  },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});
+  },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();},(guildID,channelID)=>{
+    const guild=client.guilds.get(guildID),channel=guild?.channels.get(channelID);
+    if(!guild?.shard.ready||!channel||channel.type!==2)return undefined;
+    return channel.voiceMembers.some(member=>!member.bot);
+  });eventRecorder=events;
+  // A periodic recheck also recovers after gateway interruptions or missed voice updates.
+  eventOccupancyTimer=setInterval(()=>events.recheck(),30_000);eventOccupancyTimer.unref();
+  client.on("voiceChannelJoin",(_member,channel)=>events.voiceChanged(channel.guild.id,channel.id));
+  client.on("voiceChannelLeave",(_member,channel)=>events.voiceChanged(channel.guild.id,channel.id));
+  client.on("voiceChannelSwitch",(_member,newChannel,oldChannel)=>{
+    events.voiceChanged(oldChannel.guild.id,oldChannel.id);events.voiceChanged(newChannel.guild.id,newChannel.id);
+  });
   client.on("guildScheduledEventUpdate",event=>{void events.update({id:event.id,guildID:event.guild.id,channelID:(event as unknown as {channel?:{id:string}}).channel?.id??null,entityType:event.entityType,status:event.status,name:event.name}).catch(error=>console.error("[Event recording]",error));});
 
   const schedules=new ScheduleRunner(config.recordingPath,settingsStore,recordings,async(guildID,rule)=>{
@@ -325,7 +338,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const eventID=match[2]!;
       if(mode==="enable"){const event=(await client.getGuildScheduledEvents(guildID)).find(event=>event.id===eventID);if(!event||event.entityType!==2||!(event as unknown as {channel?:{id:string}}).channel||event.status!==1)throw new Error("Select a scheduled voice-channel event that has not started yet.");}
       const next=rules.filter(rule=>rule.eventID!==eventID);if(mode==="enable")next.push({eventID,stopOnEnd:options.find((option:any)=>option.name==="stop_on_end")?.value===true});
-      await settingsStore.update(guildID,{eventRecordings:next});await interaction.editOriginalMessage({content:mode==="enable"?"Event recording enabled for that event. Recording starts when Discord marks it active; auto-stop is optional and defaults off.":"Event recording disabled for that event."});return;
+      await settingsStore.update(guildID,{eventRecordings:next});await interaction.editOriginalMessage({content:mode==="enable"?"Event recording enabled for that event. Recording starts when Discord marks it active; it stops after 60 seconds without human participants. Stopping when the event ends is optional and defaults off.":"Event recording disabled for that event."});return;
     }
     if(commandName==="access"){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to change or inspect the access policy.",flags:64});return;}

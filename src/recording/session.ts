@@ -17,7 +17,7 @@ interface Track { id: string; username: string; track: number; packet: number; p
 
 export class RecordingSession {
   title?:string;
-  stopReason?: "duration-limit";
+  stopReason?: "duration-limit" | "empty-channel";
   onDurationLimit?: () => Promise<void>;
   private durationTimer?: NodeJS.Timeout;
   readonly id = randomUUID();

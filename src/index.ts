@@ -8,7 +8,7 @@ import { config } from "./config";
 import { createDiscordClient, recordings, settingsStore, storageMonitor, closeRecordingPanels } from "./discord/client";
 
 async function main(): Promise<void> {
-  console.log("The Witness v0.1.0");
+  console.log(`The Witness v${require("../package.json").version}`);
   console.log("==================");
 
   await mkdir(config.recordingPath, {

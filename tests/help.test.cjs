@@ -41,3 +41,5 @@ test('export help explains project track choice, exclusions, reusable intros, an
  const exports=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;
  for(const text of ['Whisper on the server','TXT, SRT, and VTT','without user setup','Self-hosting'])assert.ok(exports.includes(text),text);
 });
+
+test('automation help explains empty-channel event cleanup independently of event-end stopping',()=>{const description=helpMessage('automation',{downloads:true,restricted:false}).embeds[0].description;for(const text of ['60 continuous seconds','bots do not count','rejoining cancels','Manual recordings are unaffected','event end is optional'])assert.ok(description.includes(text),text);});

@@ -266,7 +266,16 @@ with the configured Bot Wrangler role when role mode is enabled. Recording
 starts when Discord reports that selected event becoming active, using its name
 as the recording title. External and stage events are unsupported.
 
-Everything is off by default. Add `stop_on_end:true` only if the event should
+Event recording is off until an event is selected. Once started, an event-owned
+recording automatically stops and saves after **60 continuous seconds without
+human participants** in its voice channel. Bots do not count; a human rejoining
+cancels the countdown. Leaving or switching channels both count. This does not
+stop manual recordings and does not depend on Discord ending the event. Occupancy
+is rechecked after gateway interruptions; unavailable channel state never triggers
+a stop. Finalization follows normal Stop, including any configured sync end-cue delay.
+The bot then leaves voice and the saved card explains why it stopped.
+
+Add `stop_on_end:true` only if the event should
 also stop its own recording when completed or cancelled. Manual recordings are
 never adopted by an event, and a manual stop stays stopped. Use `mode:status`
 to inspect rules or `mode:disable` to remove one. Rules survive restarts;
