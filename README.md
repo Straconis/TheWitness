@@ -1,3 +1,5 @@
+![The Witness banner](docs/images/discord_banner.png)
+
 # The Witness
 
 The Witness is a private multitrack Discord recording package based on Craig, intended to run on bot-hosting.net for the owner and friends.
