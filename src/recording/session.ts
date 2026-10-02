@@ -128,10 +128,10 @@ export class RecordingSession {
     return task;
   }
 
-  note(text: string, authorID: string): Promise<void> {
+  note(text: string, authorID: string, atSamples?:bigint): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
     if (!text.trim() || text.length > 2000) return Promise.reject(new Error("Notes must contain between 1 and 2000 characters."));
-    const time = (process.hrtime.bigint() - this.start) * 48000n / 1000000000n;
+    const time = atSamples ?? this.elapsedSamples();
     const task = this.queue.then(async () => {
       if (this.failure) throw this.failure;
       if (this.notePacket === 0) await this.write("header1", encodeOggPage(0,65536,this.notePacket++,Buffer.from("STREAMNOTE"),BOS));

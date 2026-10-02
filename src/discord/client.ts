@@ -21,9 +21,10 @@ import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
 
 export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes);
-export const recordings = new RecordingManager(config.recordingPath);
+
 
 export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
+export const recordings = new RecordingManager(config.recordingPath,undefined,settingsStore);
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
 let recordingPanels:RecordingPanels|undefined;

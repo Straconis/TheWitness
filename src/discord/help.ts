@@ -4,18 +4,28 @@ export const helpTopics = [
   {value:"exports",name:"Exports & formats",description:"Projects, speaker selection, intros, silence trimming, and jobs"},
   {value:"downloads",name:"Downloads & browser tools",description:"ZIP names, private links, dashboard, and browser microphone"},
   {value:"automation",name:"Automatic recording",description:"Autojoin, events, schedules, and channel rules"},
+  {value:"sync",name:"Audio/video sync cues",description:"Pair Cameraman, configure start/end cues, and measure drift"},
   {value:"permissions",name:"Permissions & privacy",description:"Bot Wrangler roles, server settings, and deletion"},
   {value:"troubleshooting",name:"Troubleshooting & recovery",description:"Missing commands, interrupted recordings, and failed exports"}
 ] as const;
 export interface HelpContext {downloads:boolean;restricted:boolean}
 const pages:Record<string,string>={
+ sync:[
+  "**Purpose:** identify audio/video offset and drift using matching cues, not automatically correct it.",
+  "**Configure once:** open `/dashboard`, enable Audio/video sync cues, choose Start only, End only, or Start and end, and set delays (3–60 seconds). Settings apply to the next recording. End delay starts when you press Stop; Witness keeps recording through the cue.",
+  "**Pair Cameraman:** copy the private pairing URL into Cameraman’s Sync settings ([C] in its output window). Enable pairing. This read-only URL contains a secret, expires after one year, and must stay private.",
+  "**Capture:** start OBS before Witness. Capture the Cameraman OUTPUT window (the map capture alone will not contain its flash), and include system audio for its beep. Stop OBS after the end flash. Cameraman must stay running and connected.",
+  "**Result:** Witness saves a separate Sync cues track and SYNC markers. Cameraman flashes the matching cue ID and plays a beep. Match the start/end cues in your editor to measure differences. Normal Stop emits an end cue; crashes and forced shutdowns cannot guarantee one.",
+  "Cue IDs and source/export positions are in `manifest.json` → `syncCues`; Cameraman writes `sync-cues.jsonl` with output-frame timing, lateness, and network uncertainty. These log times are not OBS encoded-video timestamps. Network/frame/audio latency limits precision; use the actual recorded cues. Missed cues are logged rather than replayed late.",
+  "For drift checks use original, uncut audio. Intros, silence trimming, and mixer edits change alignment; edited-export cue positions are marked unknown. Validate a short OBS session before relying on it."
+ ].join("\n\n"),
  start:[
   "The Witness records separate, synchronized audio tracks for your group.",
   "**1. Choose a voice channel.** Have your participants join it.",
   "**2. Start:** `/record channel:General Voice title:Session 12` (the title is optional).",
   "**3. During the session:** `/note text:Combat starts` adds a timestamped note. Use `/status` or the recording panel to check progress.",
   "**4. Finish:** `/stop` saves the recording and leaves voice.",
-  "**5. Download from the saved card:** click Download to open a private web page and choose formats there. If no audio was captured, Download is disabled. You can also use `/recordings` to find saved session IDs.",
+  "**5. Download from the saved card:** click Open Downloads to open a private web page and choose formats there. If no audio was captured, Open Downloads is disabled. You can also use `/recordings` to find saved session IDs.",
   "**6. Or export by command:** `/export session:<session-id> format:audition`. Replace `<session-id>` with the ID you copied. Open the returned export-status link or download the Discord attachment.",
   "Audition is the default export. Extract the whole ZIP and open `session.sesx`; keep its media files together. Use `format:wav` for separate WAV tracks instead.",
   "Choose a topic below, or jump directly with `/help topic:Exports & formats`."

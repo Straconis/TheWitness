@@ -62,7 +62,7 @@ export class DownloadService {
     const guildID=url.pathname.slice(11);
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),sessions:await listSessions(this.root,guildID)});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage());
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -74,7 +74,7 @@ export class DownloadService {
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
         if(data.downloadNaming!==undefined&&!["date","date-channel","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
-        await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {})});return this.json(response,200,{saved:true});
+        await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {}),...(data.sync!==undefined?{sync:data.sync}:{})});return this.json(response,200,{saved:true});
       }
       if(data.action==="title"){await this.manager.exclusive(guildID,async()=>{const active=this.manager!.sessions.get(guildID);if(active&&active.id===data.session)await active.setTitle(data.title);else await renameSession(this.root,data.session,guildID,data.title);});return this.json(response,200,{saved:true});}
       if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true,{transcribe:data.transcribe===true,upload:data.upload||undefined});return this.json(response,202,{url:this.jobLink(job.id)});}
@@ -123,6 +123,14 @@ export class DownloadService {
       response.writeHead(200,{"Content-Type":"image/png","Content-Length":banner.length});
       response.end(request.method === "HEAD" ? undefined : banner);
       return;
+    }
+    if(/^\/sync-feed\/[0-9]{1,25}$/.test(url.pathname)){
+      if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
+      if(!this.authorized(url,url.pathname))return this.error(response,403,"Sync pairing link is invalid or expired.");
+      const guildID=url.pathname.split("/")[2]!;
+      const slate=this.manager?.syncSessions.get(guildID);
+      const cues=(slate?.cues??[]).filter(cue=>cue.targetUTC>Date.now()-600000);
+      return this.json(response,200,{version:1,serverUTC:Date.now(),cues});
     }
     if (["/invite", "/invite/"].includes(url.pathname)) {
       if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");

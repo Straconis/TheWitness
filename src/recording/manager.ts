@@ -1,3 +1,5 @@
+import { SessionSync } from "./sync";
+import type {SettingsStore} from "../storage/settings";
 import { assertDeploymentIdle } from "../storage/deployment";
 import { EventEmitter } from "node:events";
 import type Eris from "eris";
@@ -10,7 +12,8 @@ export class RecordingManager {
  readonly sessions=new Map<string,RecordingSession>();
  private cleanup=new Map<string,()=>void>();private buffers=new Map<string,PacketBuffer>();
  private locks=new Map<string,Promise<unknown>>();private reconnecting=new Map<string,AbortController>();private shuttingDown=false;
- constructor(private root:string,private retryDelays=[1000,2000,4000]){}
+ readonly syncSessions=new Map<string,SessionSync>();
+ constructor(private root:string,private retryDelays=[1000,2000,4000],private settings?:SettingsStore){}
  exclusive<T>(guildID:string,action:()=>Promise<T>):Promise<T>{
   if(this.shuttingDown)return Promise.reject(new Error("The Witness is shutting down."));
   const task=(this.locks.get(guildID)??Promise.resolve()).catch(()=>{}).then(action);this.locks.set(guildID,task);
@@ -23,7 +26,9 @@ export class RecordingManager {
   await assertDeploymentIdle(this.root);
   const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name);
   try{this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
-  this.sessions.set(guild.id,session);return session;
+  this.sessions.set(guild.id,session);
+  const sync=this.settings?.get(guild.id).sync;if(sync?.enabled){const slate=new SessionSync(session,sync);this.syncSessions.set(guild.id,slate);slate.start();}
+  return session;
  }
  private bind(guild:Eris.Guild,connection:Eris.VoiceConnection,session:RecordingSession,connector?:Connector):void{
   const receiver=connection.receive("opus") as unknown as EventEmitter;
@@ -67,6 +72,7 @@ export class RecordingManager {
  }
  async stop(guildID:string,error?:Error):Promise<RecordingSession|undefined>{
   this.cancelReconnect(guildID);const session=this.sessions.get(guildID);if(!session)return;
+  try{await this.syncSessions.get(guildID)?.stop(!error&&!this.shuttingDown);}catch(cueError){console.warn('[Sync] End cue failed:',cueError);}
   this.cleanup.get(guildID)?.();this.cleanup.delete(guildID);
   const buffer=this.buffers.get(guildID);this.buffers.delete(guildID);let finalError=error;
   for(const packet of buffer?.flush()??[]){try{await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival);}catch(error){finalError??=error as Error;}}
