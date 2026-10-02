@@ -248,3 +248,12 @@ multitrack browser editor, recurring schedules, channel rules and optional
 retention. These features are implemented; account setup, host compatibility
 and real Discord/Adobe/browser behavior remain to be verified. Advanced
 features remain opt-in.
+
+## In-Discord help
+
+`/help` opens a private quick-start guide with a topic menu. Use `/help topic`
+to open recording, exports, downloads/browser tools, automation, permissions,
+or troubleshooting directly. Help includes command examples and shows whether
+web downloads are enabled on the host. Help is available to everyone, including
+members without the configured Bot Wrangler role; operational access rules remain
+in effect.

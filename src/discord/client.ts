@@ -1,3 +1,4 @@
+import { helpMessage,helpTopics } from "./help";
 import { ScheduleRunner,newSchedule } from "../automation/schedules";
 import Eris from "eris";
 import { EventRecording } from "./event-recording";
@@ -73,7 +74,8 @@ async function registerCommands(client: Eris.Client): Promise<void> {
       {
         type: 1,
         name: "help",
-        description: "Show The Witness commands and recording help."
+        description: "Recording quick start, command guides, examples, and troubleshooting.",
+        options:[{type:3,name:"topic",description:"Choose a help topic",choices:helpTopics.map(topic=>({name:topic.name,value:topic.value}))}]
       },
       {
         type: 1,
@@ -224,7 +226,17 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
   client.on("interactionCreate", async (interaction: any) => {
     const wranglerSettings=interaction.guildID?settingsStore.get(interaction.guildID):undefined;
-    // Only access-policy configuration bypasses the role gate; its handler requires Manage Server.
+    // Help is informational and remains available even when bot controls are restricted.
+    const readingHelp=(interaction.type===2&&interaction.data?.name==="help")||(interaction.type===3&&interaction.data?.custom_id==="witness:help");
+    if(readingHelp){
+      try{
+        const topic=interaction.type===3?interaction.data?.values?.[0]:interaction.data?.options?.find((option:any)=>option.name==="topic")?.value;
+        const body=helpMessage(topic,{downloads:Boolean(downloads),restricted:Boolean(wranglerSettings?.restrictAccess)});
+        if(interaction.type===3){const {flags,...update}=body;await interaction.editParent(update);}else await interaction.createMessage(body);
+      }catch(error){console.warn("[Help] Could not display help.",error);}
+      return;
+    }
+    // Access-policy configuration bypasses the role gate; its handler requires Manage Server.
     const configuringAccess=interaction.type===2&&interaction.data?.name==="access";
     if([2,3,5].includes(interaction.type)&&wranglerSettings&&!configuringAccess&&!mayUseBot(wranglerSettings,interaction.member?.roles)){
       try{await interaction.createMessage({content:"The Witness is restricted to the configured Bot Wrangler role. Ask a server manager to assign you the role or switch access to everyone.",flags:64});}catch(error){console.warn("[Access] Could not send access response.",error);}return;
@@ -248,34 +260,6 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     try {
     const commandName = interaction.data?.name;
     const guildID = interaction.guildID;
-
-    if (commandName === "help") {
-      await interaction.createMessage({
-        content:
-          "## The Witness\n" +
-          "Private multitrack Discord voice recording.\n\n" +
-          "### Recording\n" +
-          "**`/record`** - Join your voice channel and begin recording.\n" +
-          "**`/stop`** - Stop recording and leave voice.\n" +
-          "**`/status`** - Show current status.\n" +
-          "**`/note`** - Add a timestamped session note.\n" +
-          "**`/recordings`** - List saved sessions.\n" +
-          "**`/export`** - Download completed speaker tracks.\n\n" +
-          "**`/access`** - Choose everyone or a Bot Wrangler role (Manage Server required).\n\n" +
-          "### Automation\n" +
-          "**`/autojoin enable|disable|status`** - Automatically join voice.\n" +
-          "**`/autorecord enable|disable|status`** - Automatically begin recording.\n" +
-          "**`/eventrecord`** - Record selected voice events.\n" +
-          "**`/schedule`** - Configure weekly recording times.\n" +
-          "**`/channelrules`** - Limit automatic joining to selected channels.\n" +
-          "**`/retention`** - Optional cleanup; days:0 keeps it off.\n" +
-          "**`/exportjob`** - Check, cancel or retry exports.\n\n" +
-          "**`/help`** - Show this message.\n\n" +
-          "*The Witness remembers.*"
-      });
-
-      return;
-    }
 
     if (!guildID) {
       await interaction.createMessage({
