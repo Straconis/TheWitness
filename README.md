@@ -363,3 +363,17 @@ the limit was reached; audio remains available for normal exports. Storage error
 still produce a failed session requiring recovery. The cap skips the delayed sync
 end cue; even a normal Stop near the deadline cannot extend audio capture beyond
 eight hours. Start a new recording to continue; no new session starts automatically.
+
+## Trim silence at the end
+
+Enable **Trim silence at the end** on the recording download page to remove
+trailing silence, including any quiet tail around the empty-channel grace period.
+It is off by default and works independently of **Trim shared silent pauses**:
+internal pauses stay intact unless that option is also enabled. It uses the same
+selected speakers and activity threshold, keeps half a second after the last
+active 100 ms window, and applies the same end cut to every processed track and
+mixdown. Excluded speakers do not prevent trimming. The intro is added afterward
+and uncut originals remain intact. Notes in the removed tail are omitted, and
+removed sync cues have no exported position. Entirely silent recordings are left
+intact by this option. A recorded audible sync end cue counts as activity if its
+track is selected; exclude that track when trimming to the conversation's end.

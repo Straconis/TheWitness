@@ -160,7 +160,7 @@ export class DownloadService {
       let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>800000)return this.json(response,413,{error:"Request too large."});}
       try{
         const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,saved.guildID,data));resolveAudioFormat(data.format,data.trackFormat);
-        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
+        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
         const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
         return this.json(response,202,{url:jobURL.toString()});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}

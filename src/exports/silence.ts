@@ -6,13 +6,18 @@ import {runTool} from "./process";
 export interface SilenceCut {start:number;end:number}
 export function silenceSeconds(value:unknown=30):number {if(typeof value!=="number"||!Number.isFinite(value)||value<0.1||value>3600)throw Error("Silence length must be between 0.1 and 3600 seconds.");return value;}
 /** Detect activity per speaker, rather than summing waveforms that could cancel. 100 ms windows, -50 dBFS. */
-export async function findSilenceCuts(files:string[],selected:Set<string>,ffmpeg:string,signal?:AbortSignal,minimumSeconds=30):Promise<{cuts:SilenceCut[];duration:number}>{
+export async function findSilenceCuts(files:string[],selected:Set<string>,ffmpeg:string,signal?:AbortSignal,minimumSeconds=30,trimEndSilence=false,trimSharedSilence=true):Promise<{cuts:SilenceCut[];duration:number;trailingCut?:SilenceCut}>{
  minimumSeconds=silenceSeconds(minimumSeconds);const activity:number[]=[];let duration=0;
  for(const file of files){signal?.throwIfAborted();const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);const child=spawn(ffmpeg,["-nostdin","-v","error","-i",file,"-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le","pipe:1"],{stdio:["ignore","pipe","pipe"],signal:combined,killSignal:"SIGKILL"});let stderr="",samples=0,pending=Buffer.alloc(0);child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-2000));const closed=once(child,"close");closed.catch(()=>{});
  try{for await(const chunk of child.stdout){const bytes=pending.length?Buffer.concat([pending,chunk]):chunk;const length=bytes.length-(bytes.length%2);for(let offset=0;offset<length;offset+=2){if(selected.has(file)&&Math.abs(bytes.readInt16LE(offset))>104)activity[Math.floor(samples/9600)]=1;samples++;}pending=bytes.subarray(length);}const [code]=await closed;if(code!==0)throw Error("Cannot analyze silence: "+stderr);duration=Math.max(duration,samples/96000);}catch(error){child.kill("SIGKILL");throw error;}
  }
- const cuts:SilenceCut[]=[];let start:number|undefined;for(let window=0;window<Math.ceil(duration*10);window++){if(!activity[window])start??=window/10;else if(start!==undefined){const end=window/10;if(end-start>minimumSeconds)cuts.push({start,end});start=undefined;}}if(start!==undefined&&duration-start>minimumSeconds)cuts.push({start,end:duration});
- if(cuts.length>500)throw Error("This recording has too many silent pauses to trim in one export.");return {cuts,duration};
+ const cuts:SilenceCut[]=[];let start:number|undefined;for(let window=0;window<Math.ceil(duration*10);window++){if(!activity[window])start??=window/10;else if(start!==undefined){const end=window/10;if(trimSharedSilence&&end-start>minimumSeconds)cuts.push({start,end});start=undefined;}}let trailingCut:SilenceCut|undefined;
+ if(start!==undefined){
+  // Keep half a second after the last active window; do not erase all-silent recordings.
+  if(trimEndSilence&&activity.length){const endStart=Math.min(duration,start+0.5);if(duration-endStart>=0.1){trailingCut={start:endStart,end:duration};cuts.push(trailingCut);}}
+  else if(trimSharedSilence&&duration-start>minimumSeconds)cuts.push({start,end:duration});
+ }
+ if(cuts.length>500)throw Error("This recording has too many silent pauses to trim in one export.");return {cuts,duration,trailingCut};
 }
 export function shiftedTime(seconds:number,cuts:SilenceCut[]):number{let removed=0;for(const cut of cuts){if(seconds>=cut.end)removed+=cut.end-cut.start;else if(seconds>cut.start){removed+=seconds-cut.start;break;}else break;}return Math.max(0,seconds-removed);}
 export async function cutSharedSilence(files:string[],cuts:SilenceCut[],duration:number,codec:string,ffmpeg:string,signal?:AbortSignal):Promise<void>{
