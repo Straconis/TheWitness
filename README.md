@@ -392,3 +392,7 @@ and uncut originals remain intact. Notes in the removed tail are omitted, and
 removed sync cues have no exported position. Entirely silent recordings are left
 intact by this option. A recorded audible sync end cue counts as activity if its
 track is selected; exclude that track when trimming to the conversation's end.
+
+## Operator troubleshooting logs
+
+The VPS captures application output and errors in the persistent systemd journal. Over SSH, use `sudo journalctl -u the-witness.service -f -o short-iso` to follow diagnostics without restarting the bot. See [Operator logs](docs/TROUBLESHOOTING-LOGS.md) for incident time windows, service/revision checks, private snapshots, and GitHub deployment logs. Hosting-wide logs require operator access and are not exposed through server dashboard links.
