@@ -13,8 +13,7 @@ case "$1" in
  refresh-redactions) exec /bin/bash --noprofile --norc "$base/enable-log-portal.sh" --refresh-redactions ;;
  cloudflare-ips) exec /usr/bin/python3 -I "$base/configure-witness-log-real-ip.py" ;;
  cloudflare-check) exec /usr/bin/python3 -I "$base/configure-witness-log-real-ip.py" --check ;;
- downloads-domain) exec /bin/bash --noprofile --norc "$base/enable-downloads-domain.sh" ;;
- downloads-ip) exec /bin/bash --noprofile --norc "$base/enable-downloads-ip.sh" ;;
+ downloads-domain|downloads-ip) exec /usr/bin/python3 -I "$base/run-admin-downloads.py" "$1" ;;
  deployment-status) exec /usr/sbin/runuser -u witness-deploy -- /bin/bash -c 'cd /opt/the-witness && /usr/local/bin/node scripts/deploy-idle.cjs' ;;
  deploy-permissions) exec /bin/bash --noprofile --norc "$base/enable-github-deploy.sh" ;;
  *) echo 'Unknown admin action.' >&2; exit 2 ;;

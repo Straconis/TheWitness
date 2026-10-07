@@ -1,8 +1,16 @@
 # GitHub deployment
 
-Every push to `main` runs `.github/workflows/deploy.yml`. The workflow installs
+Deployment requires an explicit operator command; pushes do not update the VPS.
+The separate test workflow still checks pushes and pull requests without VPS access.
+Run this from an authenticated GitHub CLI when ready:
+
+```sh
+gh workflow run deploy.yml --repo Straconis/TheWitness --ref main
+```
+
+Alternatively choose **Run workflow** in GitHub Actions. The workflow installs
 Node 24, builds the application, runs the test suite, and packages a release.
-A failed build or test does not change the VPS. Manual runs are also available.
+A failed build or test does not change the VPS.
 
 GitHub repository secrets:
 
@@ -39,10 +47,14 @@ active with the same process ID across two checks, and restores the previous
 release if restart/startup fails. This is a process health check; it does not prove
 a live Discord voice session or web route works. GitHub Actions reports errors.
 If the bot stays busy for 30 minutes, the deployment fails without replacing code;
-rerun it when idle. Deployments are serialized. Rapid pushes can supersede a pending workflow run;
-the newest tested version is deployed.
+rerun it when idle. Deployments are serialized. Each manual run tests and deploys
+the revision selected when that run starts; later pushes require another run.
 
-To stop automatic updates, disable the workflow in GitHub Actions. To remove VPS
+Download administration holds the same deployment lock, so it cannot overlap
+a deployment or clear its recording pause. Manual deployment control complements
+this locking; it does not replace it.
+
+To remove VPS
 restart permission, remove `/etc/sudoers.d/the-witness-github-deploy` as administrator.
 Source files in the local VM remain the editing workspace; production source for
 each deployment is stored with that release. Successful releases also update the stable deployment helper scripts for future pushes.

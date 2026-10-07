@@ -35,9 +35,9 @@ test('Craig correction exports separate tracks that decode to PCM', async () => 
         bobPcm.writeInt16LE(bobValue,i*4); bobPcm.writeInt16LE(bobValue,i*4+2);
       }
       const opus = encoder.encode(pcm);
-      await session.append(opus,'alice','Alice',frame*960);
-      await session.append(bobEncoder.encode(bobPcm),'bob','Bob',frame*960);
-      await new Promise(resolve=>setTimeout(resolve,20));
+      // Synthetic capture follows sample time, independent of CI scheduler delays.
+      await session.append(opus,'alice','Alice',frame*960,BigInt(frame*960+1));
+      await session.append(bobEncoder.encode(bobPcm),'bob','Bob',frame*960,BigInt(frame*960+1));
     }
     await assert.rejects(exportSession(root,session.id), /completed/);
     await session.note("The dragon appears", "alice");

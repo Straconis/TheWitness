@@ -1,11 +1,6 @@
-name: Test and deploy The Witness
+name: Deploy The Witness manually
 on:
-  push:
-    branches: [main]
-    # A deploy waits for recordings to drain and blocks new ones; skip it for pure documentation pushes.
-    paths-ignore:
-      - '**.md'
-      - 'licenses/**'
+  # Source pushes never deploy; an operator must explicitly start this workflow.
   workflow_dispatch:
 permissions:
   contents: read

@@ -71,3 +71,37 @@ for fail in (False,True):
 print('Migration isolation and rollback verified')`;
  const r=spawnSync('python3',['-I','-c',code],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/rollback verified/);
 });
+test('download administration shares the deployment lock and rejects unsafe lock files',()=>{
+ const code=`import importlib.util,pathlib,tempfile,os,sys,fcntl,subprocess
+spec=importlib.util.spec_from_file_location('admin',${JSON.stringify(path.resolve('scripts/run-admin-downloads.py'))});m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+m.os.geteuid=lambda:0;sys.argv=['fixture','downloads-domain']
+with tempfile.TemporaryDirectory() as root:
+ root=pathlib.Path(root);m.LOCK=root/'lock';m.LOCK.write_text('unchanged');m.BASE=root
+ held=os.open(m.LOCK,os.O_RDONLY);fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ def forbidden(*a,**k):raise AssertionError('Setup ran while deployment held its lock')
+ m.subprocess.run=forbidden
+ try:m.main()
+ except SystemExit as e:assert 'running' in str(e),e
+ else:raise AssertionError('Concurrent setup accepted')
+ os.close(held)
+ calls=[]
+ def setup(args):
+  other=os.open(m.LOCK,os.O_RDONLY)
+  try:
+   try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError:pass
+   else:raise AssertionError('Setup did not retain deployment lock')
+  finally:os.close(other)
+  calls.append(args);return subprocess.CompletedProcess(args,0)
+ m.subprocess.run=setup;m.main();assert calls==[['/bin/bash','--noprofile','--norc',str(root/'enable-downloads-domain.sh')]];assert m.LOCK.read_text()=='unchanged'
+ m.subprocess.run=forbidden;m.LOCK.unlink();target=root/'target';target.write_text('preserved');m.LOCK.symlink_to(target)
+ try:m.main()
+ except SystemExit as e:assert 'safely' in str(e),e
+ else:raise AssertionError('Symlink lock accepted')
+ assert target.read_text()=='preserved';m.LOCK.unlink();os.mkfifo(m.LOCK)
+ try:m.main()
+ except SystemExit as e:assert 'Invalid deployment lock' in str(e),e
+ else:raise AssertionError('FIFO lock accepted')
+ print('Shared lock excludes concurrent setup; unsafe paths rejected')`;
+ const r=spawnSync('python3',['-I','-c',code],{encoding:'utf8',timeout:10000});assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/unsafe paths rejected/);
+});

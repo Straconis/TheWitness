@@ -2,7 +2,7 @@
 
 # The Witness
 
-The Witness is a multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. A hosted version is provided by the project owner on a RackNerd VPS, with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
+The Witness is a multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. A hosted version is provided by the project owner on a RackNerd VPS, with operator-triggered deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
 
 **[Add The Witness to your Discord server](https://thewitness.dev/invite)**
 
@@ -20,7 +20,7 @@ The comparison below refers to **Craig's public hosted service**. Craig also pub
 
 | Area | Craig's public service | The Witness |
 | --- | --- | --- |
-| Hosting and maintenance | A hosted bot you invite to your server. | Use the version hosted by the project owner, or run your own instance. The hosted deployment uses a RackNerd VPS with automatic deployment from GitHub. |
+| Hosting and maintenance | A hosted bot you invite to your server. | Use the version hosted by the project owner, or run your own instance. The hosted deployment uses a RackNerd VPS with operator-triggered deployment from GitHub. |
 | Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | Default 8-hour maximum per recording session, configurable from 2–24 hours; disk space and host resources also limit recording. Optional retention is controlled by the operator. |
 | Transcription | Available to Tier 3 Supporters. | Server-side Whisper transcription is already configured on the live deployment and produces TXT, SRT, and VTT when requested for an export, without a subscription or user setup. Self-hosted instances need a Whisper executable/model and processing capacity. |
 | Export formats | Advertises FLAC, AAC, Audacity projects, and Adobe Audition sessions; its FAQ says MP3 export is unavailable. | FLAC, WAV, AAC/M4A, Ogg Opus, MP3, Audacity import projects, and Adobe Audition sessions. Project ZIPs offer WAV or FLAC for individual tracks. |
@@ -49,7 +49,7 @@ Generated recordings and production downloads have verified codecs, both speaker
 ## Goals
 
 - Per-user multitrack Discord voice recording
-- Self-hosted on a VPS with automatic deployment from GitHub
+- Self-hosted on a VPS with operator-triggered deployment from GitHub
 - All implemented features available without premium tiers
 - Default 8-hour maximum recording sessions; configurable 2, 4, 6, 8, 12, 16, or 24 hours
 - No plugin marketplace architecture

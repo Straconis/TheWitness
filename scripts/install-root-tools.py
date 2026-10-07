@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install an explicitly reviewed, checksum-pinned admin snapshot; never called by deploy."""
 import os, pathlib, shutil, stat, tempfile
-FILES=('set-portal-username.py','enable-log-portal.sh','configure-witness-log-real-ip.py','enable-downloads-domain.sh','enable-downloads-ip.sh','enable-github-deploy.sh')
+FILES=('run-admin-downloads.py','set-portal-username.py','enable-log-portal.sh','configure-witness-log-real-ip.py','enable-downloads-domain.sh','enable-downloads-ip.sh','enable-github-deploy.sh')
 def secure(path):
     info=path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:
