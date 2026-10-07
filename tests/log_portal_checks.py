@@ -73,6 +73,18 @@ class Checks(unittest.TestCase):
    result=subprocess.run(['python3','-','--refresh-redactions'],input=code,capture_output=True,text=True)
    self.assertNotEqual(result.returncode,0);self.assertIn('run enable-log-portal.sh setup first',result.stderr)
    self.assertNotIn('Traceback',result.stderr)
+ def test_full_setup_keeps_existing_cloudflare_snippet(self):
+  import tempfile
+  installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()
+  template=installer.split("<<'NGINX'\n",1)[1].split('\nNGINX',1)[0]
+  code=installer.split("<<'PYIP'\n",1)[1].split('\nPYIP',1)[0]
+  with tempfile.TemporaryDirectory() as root:
+   site=pathlib.Path(root)/'site';site.write_text(template)
+   code=code.replace('/etc/nginx/sites-available/the-witness-logs',str(site))
+   subprocess.run(['python3','-'],input=code,text=True,check=True)
+   text=site.read_text();self.assertEqual(text.count('include /etc/nginx/snippets/the-witness-cloudflare-real-ip.conf;'),2)
+   self.assertIn('proxy_set_header Authorization $http_authorization;',text)
+   self.assertIn('limit_req zone=witness_logs',text)
  def test_installer_username_prompt_on_a_real_terminal(self):
   import os, pty, fcntl, termios
   installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()

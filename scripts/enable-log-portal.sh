@@ -133,6 +133,18 @@ server {
  }
 }
 NGINX
+# Full setup must preserve visitor-IP restoration enabled by the operator.
+if [[ -f /etc/nginx/snippets/the-witness-cloudflare-real-ip.conf ]]; then
+ python3 - <<'PYIP'
+from pathlib import Path
+site=Path('/etc/nginx/sites-available/the-witness-logs')
+marker=' server_name logs.thewitness.dev;'
+include=' include /etc/nginx/snippets/the-witness-cloudflare-real-ip.conf;'
+text=site.read_text()
+if text.count(marker)!=2:raise SystemExit('Unexpected log virtual-host layout.')
+site.write_text(text.replace(marker,marker+'\n'+include))
+PYIP
+fi
 nginx -t
 # Permit future GitHub deployments to restart only this additional service.
 tmp=$(mktemp)

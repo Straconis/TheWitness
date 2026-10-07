@@ -88,6 +88,14 @@ sudo bash /opt/the-witness/scripts/enable-log-portal.sh --refresh-redactions
 
 This reads the bot configuration, preserves the existing username/hash, atomically replaces the root-only portal environment file and restarts the portal. Do not print the environment file or inspect service environment values when diagnosing startup; use service state and its journal instead.
 
-On October 7, 2026 the operator enabled Cloudflare visitor-IP restoration in the dedicated log virtual host. Nginx trusts only validated Cloudflare source ranges before using CF-Connecting-IP, so the existing rate-limit key uses visitor addresses for proxied requests. Direct origin clients cannot override their address with that header. Authentication remains required for both paths. The applied maintenance helper is included in the 0.1.13 review archive and VM-Share as configure-witness-log-real-ip.py. Full portal setup rewrites the virtual host; reapply this helper afterward. Redaction-only refresh and normal GitHub source deployments preserve the nginx configuration.
+On October 7, 2026 the operator enabled Cloudflare visitor-IP restoration in the dedicated log virtual host. Nginx trusts only validated Cloudflare source ranges before using CF-Connecting-IP, so the existing rate-limit key uses visitor addresses for proxied requests. Direct origin clients cannot override their address with that header. Authentication remains required for both paths. The maintenance helper is committed as scripts/configure-witness-log-real-ip.py and installed by source deployments. Full portal setup preserves the existing Cloudflare snippet; redaction-only refresh and normal source deployments preserve the nginx configuration too.
 
 Redaction refresh recognizes quoted multiline dotenv secrets, exported assignments, escaped newlines and comments following unquoted values. Individual multiline secret lines are also included for exact-value redaction when journal records split them. Redaction remains best-effort; refresh the snapshot whenever secrets change.
+
+Cloudflare ranges are a snapshot taken when the helper runs. Refresh them periodically (for example, during monthly host maintenance) and whenever Cloudflare announces a range change:
+
+```sh
+sudo python3 /opt/the-witness/scripts/configure-witness-log-real-ip.py
+```
+
+The helper downloads and validates the current official IPv4/IPv6 ranges, backs up configuration, checks nginx syntax and reloads it. Failed validation/reload restores the previous files. This does not rotate credentials or restart the recorder.
