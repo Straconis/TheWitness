@@ -475,9 +475,16 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         let directory:string;
         if (exportQueue) {
           const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat });
-          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`});
-          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: queuePositionText(position) }));
-          if(!job){console.warn(`[Export] Attachment delivery stopped for job ${queued.id}; its queued export is preserved.`);return;}
+          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`}).catch((error:unknown) => console.warn("[Export] Could not update reply:", error));
+          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${queuePositionText(position)}` }));
+          if(!job){
+            console.warn(`[Export] Attachment delivery stopped for job ${queued.id}; its queued export is preserved.`);
+            const reason = exportQueue.stopping
+              ? "The Witness is restarting, so this reply can't deliver your export. The job is saved and resumes after the restart."
+              : "Discord only lets this reply update for 15 minutes, so the export can't be attached here. The job continues and its files stay on the host.";
+            await interaction.editOriginalMessage({ content: `${reason}\nCheck it with /exportjob action:status job:${queued.id}` }).catch((error:unknown) => console.warn("[Export] Could not update delivery status:", error));
+            return;
+          }
           if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
           directory = path.join(config.recordingPath, job.sessionID, job.directory);
         } else directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat });
