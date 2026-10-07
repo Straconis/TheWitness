@@ -37,8 +37,8 @@ export class RecordingPanels {
  }
  update():Promise<void>{
   if(this.updating)return this.updating;
-  const task=(async()=>{for(const [guild,panel] of this.panels){try{await this.transport.editMessage(panel.channel,panel.id,panelBody(panel.session,this.space.status?.low,Date.now(),this.context(panel.session)));if(panel.session.state!=="recording")this.panels.delete(guild);}catch(error){console.warn('[Panel] Could not edit status message.',error);if([10008,50013].includes((error as {code?:number}).code??0))this.panels.delete(guild);}}
+  const task=(async()=>{for(const [guild,panel] of this.panels){try{const finalState=panel.session.state!=="recording";await this.transport.editMessage(panel.channel,panel.id,panelBody(panel.session,this.space.status?.low,Date.now(),this.context(panel.session)));if(finalState)this.panels.delete(guild);}catch(error){console.warn('[Panel] Could not edit status message.',error);if([10008,50013].includes((error as {code?:number}).code??0))this.panels.delete(guild);}}
    if(!this.panels.size&&this.timer){clearInterval(this.timer);this.timer=undefined;}})();this.updating=task;void task.finally(()=>this.updating=undefined).catch(()=>{});return task;
  }
- async close():Promise<void>{if(this.timer)clearInterval(this.timer);this.timer=undefined;await Promise.allSettled([...this.starts.values()]);await this.update();if(this.timer)clearInterval(this.timer);this.timer=undefined;}
+ async close():Promise<void>{if(this.timer)clearInterval(this.timer);this.timer=undefined;await Promise.allSettled([...this.starts.values()]);await this.updating;await this.update();if(this.timer)clearInterval(this.timer);this.timer=undefined;}
 }

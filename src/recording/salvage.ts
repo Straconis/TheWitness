@@ -1,3 +1,4 @@
+import {UserError} from "../errors";
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, writeFile, rename, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -45,7 +46,7 @@ async function append(file: FileHandle, bytes: Buffer): Promise<void> {
 
 export async function recoverSession(root: string, sourceID: string, guildID: string): Promise<string> {
  const metadata=await getSession(root,sourceID,guildID);
- if(!["interrupted","failed"].includes(metadata.state)) throw new Error("Only interrupted or failed sessions can be recovered.");
+ if(!["interrupted","failed"].includes(metadata.state)) throw new UserError("Only interrupted or failed sessions can be recovered.");
  const source=path.join(root,sourceID),id=randomUUID(),temporary=path.join(root,id+".tmp"),target=path.join(root,id);
  await mkdir(temporary);
  const output:FileHandle[]=[];
@@ -77,7 +78,7 @@ export async function recoverSession(root: string, sourceID: string, guildID: st
    }
    if(page.data.length) pending=page;
   }
-  if(!packets) throw new Error("No complete recoverable audio packets were found.");
+  if(!packets) throw new UserError("No complete recoverable audio packets were found.");
   const trackList=[...tracks].sort((a,b)=>a-b);
   await writeFile(path.join(temporary,"audio.ogg.header1"),Buffer.concat(trackList.map(track=>heads.get(track)!.bytes)));
   await writeFile(path.join(temporary,"audio.ogg.header2"),Buffer.concat(trackList.map(track=>tags.get(track)!.bytes)));
@@ -87,6 +88,15 @@ export async function recoverSession(root: string, sourceID: string, guildID: st
    try {const note=JSON.parse(line);if(typeof note.text==="string" && typeof note.seconds==="number")notes.push(note);}catch{}
   }} catch(error) {if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
   await writeFile(path.join(temporary,"notes.jsonl"),notes.map(note=>JSON.stringify(note)+"\n").join(""));
+  // Cue timing shares the preserved packet timeline; without it, exports cannot report sync cue positions.
+  let sync;
+  try {
+   const parsed=JSON.parse(await readFile(path.join(source,"sync-cues.json"),"utf8"));
+   if(!parsed||parsed.version!==1||parsed.sessionID!==sourceID||!Array.isArray(parsed.cues)||parsed.cues.some((cue:any)=>!cue||typeof cue.id!=="string"||cue.sessionID!==sourceID||!["start","end"].includes(cue.kind)||!["scheduled","captured","cancelled"].includes(cue.state)||!Number.isFinite(cue.seconds)||cue.seconds<0||!Number.isFinite(cue.duration)||cue.duration<=0||!Number.isFinite(cue.targetUTC)))throw Error("Invalid sync-cue metadata.");
+   // Cue IDs and clock/timeline positions remain tied to the original capture for external sync.
+   sync={...parsed,recoverySourceID:sourceID};
+  }catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")console.warn("[Recovery] Preserved source but skipped unreadable optional sync-cue metadata.",error);}
+  if(sync)await writeFile(path.join(temporary,"sync-cues.json"),JSON.stringify(sync,null,2));
   await writeFile(path.join(temporary,"audio.ogg.info"),JSON.stringify({format:1,guild:guildID,channel:metadata.channelID,startTime:metadata.startedAt,features:recordingFeatures},null,2));
   await data.sync();await data.close();output.pop();
   await writeFile(path.join(temporary,"session.json"),JSON.stringify({

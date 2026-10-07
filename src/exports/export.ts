@@ -97,9 +97,11 @@ export async function exportSession(root: string, sessionID: string, options: Ex
         }else await convert(["-i",ogg,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
         rawTracks.push({file,userID:track.id,username:track.username});
       }
-      if(start>0||end!==undefined){
+      const excerpt=[...(start>0?["-ss",String(start)]:[]),...(end!==undefined?["-t",String(end-start)]:[])];
+      // Only Ogg output needs a trimmed Opus file; other formats trim while decoding, avoiding a second lossy Opus generation.
+      if(excerpt.length&&format==="ogg"){
         const trimmed=path.join(temporary,`trim-${track.track}.ogg`);
-        await convert(["-i",ogg,"-ss",String(start),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);
+        await convert(["-i",ogg,...excerpt,"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);
         await rename(trimmed,ogg);
       }
       const file = `track-${track.track}.${format==="aac"?"m4a":format}`;
@@ -108,9 +110,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
           if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw new Error("Invalid browser source.");
           const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
           const args=["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`];
-          if(start>0)args.push("-ss",String(start));if(end!==undefined)args.push("-t",String(end-start));
-          await convert([...args,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
-        }else await convert(["-i",ogg,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
+          await convert([...args,...excerpt,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
+        }else await convert(["-i",ogg,...excerpt,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);
       }
       const edit=options.edits?.tracks.find(edit=>edit.track===track.track);
       if(edit){const edited=path.join(temporary,`edited-${track.track}.${format==="aac"?"m4a":format}`);await renderEdits(path.join(temporary,file),edited,edit,options.edits!.tracks.some(track=>track.solo),codecs[format],ffmpegPath(options),options.signal);await rename(edited,path.join(temporary,file));}

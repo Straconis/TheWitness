@@ -171,7 +171,7 @@ an active recording (up to 8 remote guests per recording; the connection is ping
 Browser audio preserves original PCM for lossless WAV/FLAC speaker exports.
 Download pages support audio previews and clipped exports. `/recover` salvages
 checksummed complete audio from interrupted sessions into a new session while
-keeping the original. `/delete` requires explicit confirmation and Manage Server.
+keeping the original. Valid sync-cue metadata is retained with its original cue IDs and timing; damaged optional cue metadata is skipped with a warning so audio recovery can continue. Browser-guest recovery currently falls back to Opus and does not preserve the separate lossless PCM. `/delete` requires explicit confirmation and Manage Server.
 
 Exports persist in a disk-backed queue and resume queued jobs after restart.
 The live deployment already has server-side Whisper transcription configured: select
@@ -229,7 +229,7 @@ in place about every ten seconds. It shows recording duration, track/note counts
 connection or reconnect state, packet drops and low-disk-space warnings. It uses
 bot message edits so updates continue beyond interaction-token expiry. Automatic
 recordings try to post the panel in the voice channel's text chat. Missing send
-permissions leave recording working and `/status` available.
+permissions leave recording working and `/status` available. On a graceful shutdown, recordings finalize before the last card edit, which shows saved or failed state and disables live recording controls.
 
 The panel includes **Status**, **Add note** and **Stop** buttons. Any member of
 the server may use `/note` or the Add note form; they do not need to have started
@@ -311,7 +311,9 @@ members without the configured Bot Wrangler role; operational access rules remai
 in effect.
 
 `/record` requires a `channel` selection and accepts an optional `title`. You can
-start it from text chat if you have permission to view/connect to that voice channel.
+start it from text chat if you have permission to view/connect to that voice channel. If a start fails after this request joins voice, the bot leaves unless a recording is already active. A pre-existing auto-join connection is kept.
+
+Slash commands register for newly added servers without a restart; a registration failure in one server does not block the others. Commands show explicitly designated user-facing validation messages. Unexpected failures keep a generic reply and are logged; error replies disable mentions.
 
 The live recording panel uses a Discord embed with state colors, duration, speaker
 track/note counts, channel, start time, packet drops, and session ID. Low-space
@@ -325,6 +327,8 @@ The private recording download panel offers Audition/Audacity projects and Ogg O
 For the current RackNerd host, an administrator can run `sudo bash /opt/the-witness/scripts/enable-downloads-ip.sh` once to configure HTTPS at the VPS IP, an nginx proxy to the loopback-only download service, and automatic IP certificate renewal. This setup requires idle recordings/exports and does not print the bot credentials. `DOWNLOAD_BIND_HOST` controls the listener address; the setup sets it to `127.0.0.1`.
 
 For `thewitness.dev`, run `sudo bash /opt/the-witness/scripts/enable-downloads-domain.sh` instead of the IP setup. It issues a domain certificate, enables the private download service at `https://thewitness.dev`, and configures automatic renewal. Cloudflare must route the domain to this VPS and permit HTTP ACME validation; use Full (strict) TLS mode once the origin certificate is installed. The website root returns 404 by design; access recordings through signed Discord Download links.
+
+WAV, FLAC, MP3 and AAC excerpts trim directly during conversion from the corrected recording, avoiding an extra intermediate Opus encode. Ogg excerpts still require an Opus encode. Lossless output preserves the decoded source quality; it cannot restore information already lost in Discord Opus audio.
 
 Private download pages let you choose which speaker tracks appear in mixed audio. All speakers are included by default. Excluded speakers keep their separate tracks in multi-track/project downloads, and at least one speaker must remain selected.
 

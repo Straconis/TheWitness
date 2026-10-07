@@ -1,3 +1,4 @@
+import {UserError,commandErrorMessage} from "../errors";
 import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
 import { helpMessage,helpTopics } from "./help";
 import { ScheduleRunner,newSchedule } from "../automation/schedules";
@@ -20,6 +21,7 @@ import { archiveExport } from "../exports/archive";
 
 import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
+import type { RecordingSession } from "../recording/session";
 
 export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes,undefined,undefined,config.lowDiskCriticalBytes,()=>{void recordings.stopForLowDisk().catch(error=>console.error("[Storage] Recording stop failed.",error));});
 
@@ -32,12 +34,16 @@ let recordingPanels:RecordingPanels|undefined;
 let eventRecorder:EventRecording|undefined;
 let eventOccupancyTimer:NodeJS.Timeout|undefined;
 let scheduleRunner:ScheduleRunner|undefined;
-export async function closeRecordingPanels():Promise<void>{if(eventOccupancyTimer)clearInterval(eventOccupancyTimer);await eventRecorder?.close();await scheduleRunner?.close();await recordingPanels?.close();}
+/** Stop event and schedule automation so it cannot start or stop recordings during shutdown. */
+export async function closeAutomation():Promise<void>{if(eventOccupancyTimer)clearInterval(eventOccupancyTimer);const results=await Promise.allSettled([(async()=>eventRecorder?.close())(),(async()=>scheduleRunner?.close())()]);const errors=results.filter(result=>result.status==="rejected").map(result=>(result as PromiseRejectedResult).reason);if(errors.length)throw new AggregateError(errors,"Automation shutdown failed.");}
+export async function closePanels():Promise<void>{await recordingPanels?.close();}
+export async function closeRecordingPanels():Promise<void>{try{await closeAutomation();}finally{await closePanels();}}
 const exportJobs = new Set<string>();
 
-async function registerCommands(client: Eris.Client): Promise<void> {
-  for (const guild of client.guilds.values()) {
-    await client.bulkEditGuildCommands(guild.id, [
+/** One server's failure (for example a missing applications.commands scope) must not skip the others. */
+async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild> = client.guilds.values()): Promise<void> {
+  for (const guild of guilds) {
+    const registered = await client.bulkEditGuildCommands(guild.id, [
       {type:1,name:"recordinglimit",description:"Set the recording maximum (Manage Server required).",options:[{type:4,name:"hours",description:"Maximum hours; omit to show current setting",choices:RECORDING_DURATION_HOURS.map(value=>({name:`${value} hours`,value}))}]},
       {type:1,name:"schedule",description:"Opt into recurring recording (Manage Server required).",options:[{type:3,name:"action",description:"Schedule action",required:true,choices:[{name:"Add",value:"add"},{name:"Remove",value:"remove"},{name:"List",value:"list"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]},{type:3,name:"time",description:"Start HH:MM in the selected time zone"},{type:3,name:"days",description:"Weekdays as numbers: 0=Sun, 1=Mon, … 6=Sat (comma-separated)"},{type:3,name:"timezone",description:"IANA time zone, e.g. America/New_York (default UTC)"},{type:4,name:"minutes",description:"Recording duration in minutes",min_value:1,max_value:1440},{type:3,name:"title",description:"Recording title",max_length:120},{type:3,name:"id",description:"Schedule ID to remove"}]},
       {type:1,name:"retention",description:"Opt into deleting old completed recordings (Manage Server required).",options:[{type:4,name:"days",description:"Keep completed recordings this many days; 0 disables cleanup",required:true,min_value:0,max_value:3650},{type:5,name:"confirm",description:"Confirm automatic permanent deletion"}]},
@@ -119,9 +125,9 @@ async function registerCommands(client: Eris.Client): Promise<void> {
           }
         ]
       }
-    ]);
+    ]).then(() => true, error => { console.error(`[Discord] Failed to register commands in ${guild.name} (${guild.id}):`, error); return false; });
 
-    console.log(
+    if (registered) console.log(
       `[Discord] Registered commands in ${guild.name} (${guild.id})`
     );
   }
@@ -132,7 +138,7 @@ async function joinVoiceChannel(
 ): Promise<Eris.VoiceConnection> {
   const session = recordings.sessions.get(guild.id);
   if (session && session.channelID !== channelID) {
-    throw new Error("Stop the existing recording before changing channels.");
+    throw new UserError("Stop the existing recording before changing channels.");
   }
   const connection = await client.joinVoiceChannel(channelID, {
     opusOnly: true, selfDeaf: false, selfMute: false
@@ -161,6 +167,20 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
   return true;
 }
 
+/** Join and start recording; if this call joined but recording cannot start, leave instead of idling in voice. */
+async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID: string, title?: string): Promise<RecordingSession> {
+  const wasConnected = client.voiceConnections.has(guild.id);
+  const connection = await joinVoiceChannel(client, guild, channelID);
+  try {
+    const session = await recordings.start(guild, channelID, connection, () => client.joinVoiceChannel(channelID, {opusOnly:true,selfDeaf:false}));
+    if (title) await session.setTitle(title);
+    return session;
+  } catch (error) {
+    if (!wasConnected && !recordings.sessions.has(guild.id)) leaveVoiceChannel(guild);
+    throw error;
+  }
+}
+
 export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
@@ -178,10 +198,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   };
 
   const events=new EventRecording(settingsStore,recordings,async event=>{
-    const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new Error("Event voice channel unavailable.");
-    const connection=await joinVoiceChannel(client,guild,event.channelID);
-    const session=await recordings.start(guild,event.channelID,connection,()=>client.joinVoiceChannel(event.channelID!,{opusOnly:true,selfDeaf:false}));
-    await session.setTitle(event.name.replace(/[\x00-\x1f\x7f]/g," ").trim().slice(0,120)||"Discord event");
+    const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new UserError("Event voice channel unavailable.");
+    const session=await startRecording(client,guild,event.channelID,event.name.replace(/[\x00-\x1f\x7f]/g," ").trim().slice(0,120)||"Discord event");
     await panels.ensure(event.channelID,session).catch(error=>console.warn("[Event panel]",error));return session.id;
   },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();},(guildID,channelID)=>{
     const guild=client.guilds.get(guildID),channel=guild?.channels.get(channelID);
@@ -198,9 +216,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   client.on("guildScheduledEventUpdate",event=>{void events.update({id:event.id,guildID:event.guild.id,channelID:(event as unknown as {channel?:{id:string}}).channel?.id??null,entityType:event.entityType,status:event.status,name:event.name}).catch(error=>console.error("[Event recording]",error));});
 
   const schedules=new ScheduleRunner(config.recordingPath,settingsStore,recordings,async(guildID,rule)=>{
-    const guild=client.guilds.get(guildID),channel=guild?.channels.get(rule.channelID);if(!guild||!channel||channel.type!==2)throw Error("Scheduled voice channel unavailable.");
-    const connection=await joinVoiceChannel(client,guild,rule.channelID),session=await recordings.start(guild,rule.channelID,connection,()=>client.joinVoiceChannel(rule.channelID,{opusOnly:true,selfDeaf:false}));
-    if(rule.title)await session.setTitle(rule.title);await panels.ensure(rule.channelID,session).catch(error=>console.warn("[Schedule panel]",error));return session.id;
+    const guild=client.guilds.get(guildID),channel=guild?.channels.get(rule.channelID);if(!guild||!channel||channel.type!==2)throw new UserError("Scheduled voice channel unavailable.");
+    const session=await startRecording(client,guild,rule.channelID,rule.title);await panels.ensure(rule.channelID,session).catch(error=>console.warn("[Schedule panel]",error));return session.id;
   },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});scheduleRunner=schedules;let schedulesStarted=false;
   client.on("ready", async () => {
     console.log(
@@ -209,11 +226,13 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     try {
       if(!schedulesStarted){await schedules.load();schedules.startTimer();schedulesStarted=true;}
-      await registerCommands(client);
     } catch (error) {
-      console.error("[Discord] Failed to register commands:", error);
+      console.error("[Schedule] Could not load recurring recordings:", error);
     }
+    await registerCommands(client);
   });
+  // Servers that add the bot while it is running need commands without waiting for a restart.
+  client.on("guildCreate", guild => { void registerCommands(client, [guild]); });
 
   client.on("voiceChannelJoin", async (member, channel) => {
     if (member.bot || member.id === client.user.id) {
@@ -238,12 +257,11 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
       await recordings.exclusive(guild.id, async () => {
         if (client.voiceConnections.has(guild.id)) return;
-        const connection = await joinVoiceChannel(client, guild, channel.id);
         if (settings.autoRecord) {
-          const session = await recordings.start(guild, channel.id, connection, () => client.joinVoiceChannel(channel.id, {opusOnly:true,selfDeaf:false}));
+          const session = await startRecording(client, guild, channel.id);
           console.log(`[AutoRecord] Started session ${session.id}`);
           await panels.ensure(channel.id,session).catch(error=>console.warn("[Panel] Could not post in voice-channel chat; /status remains available.",error));
-        }
+        } else await joinVoiceChannel(client, guild, channel.id);
       });
     } catch (error) {
       console.error("[AutoJoin] Failed:", error);
@@ -272,7 +290,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       await interaction.defer(64);
       try{
         const session=await getSession(config.recordingPath,downloadSelection[1]!,interaction.guildID);
-        if(session.state!=="completed"||!session.tracks.length)throw new Error("This recording has no completed audio to download.");
+        if(session.state!=="completed"||!session.tracks.length)throw new UserError("This recording has no completed audio to download.");
         await interaction.editOriginalMessage({content:downloads?`[Open your private download panel](${downloads.recordingLink(session.id)})\nChoose project and audio formats on that page. This link expires in 24 hours; share it only with your group.`:"Web downloads are not enabled on this host yet. Use /export to get a Discord attachment, or ask the host operator to enable the download website."});
       }catch(error){await interaction.editOriginalMessage({content:"This recording is unavailable in this server or has no completed audio to download."});}
       return;
@@ -285,7 +303,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if(match[1]==="note"&&interaction.type===3){await interaction.createModal({title:"Add a session note",custom_id:`witness:note-submit:${session.id}`,components:[{type:1,components:[{type:4,custom_id:"note",style:2,label:"Note",required:true,max_length:2000}]}]});return;}
         await interaction.defer(64);
         if(match[1]==="status"){const {components,...body}=panelBody(session,storageMonitor.status?.low,Date.now(),panelContext(session));await interaction.editOriginalMessage(body);return;}
-        if(match[1]==="note-submit"&&interaction.type===5){const text=interaction.data?.components?.flatMap((row:any)=>row.components??[]).find((item:any)=>item.custom_id==="note")?.value;await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)throw new Error("Recording has stopped.");await session.note(text,interaction.member?.id??"unknown");});await interaction.editOriginalMessage({content:"Timestamped note saved."});await panels.update();return;}
+        if(match[1]==="note-submit"&&interaction.type===5){const text=interaction.data?.components?.flatMap((row:any)=>row.components??[]).find((item:any)=>item.custom_id==="note")?.value;await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)throw new UserError("Recording has stopped.");await session.note(text,interaction.member?.id??"unknown");});await interaction.editOriginalMessage({content:"Timestamped note saved."});await panels.update();return;}
         if(match[1]==="stop"&&interaction.type===3){recordings.cancelReconnect(session.guildID);await recordings.exclusive(session.guildID,async()=>{if(recordings.sessions.get(session.guildID)!==session)return;try{await recordings.stop(session.guildID);}finally{const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);}});await interaction.editOriginalMessage({content:"Recording stopped and saved."});await panels.update();return;}
         await interaction.editOriginalMessage({content:"Unsupported panel action."});
       }catch(error){console.error('[Panel action]',error);try{const body={content:"The action failed. Check recording status and the bot logs.",flags:64};if(interaction.acknowledged)await interaction.editOriginalMessage(body);else await interaction.createMessage(body);}catch{}}
@@ -321,15 +339,15 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required for automation settings.",flags:64});return;}
       const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value;await interaction.defer(64);
       if(commandName==="recordinglimit"){const hours=value("hours");if(hours!==undefined)await settingsStore.update(guildID,{recordingDurationHours:hours});await interaction.editOriginalMessage({content:`Recording maximum: ${hours??settings.recordingDurationHours??DEFAULT_RECORDING_DURATION_HOURS} hours. Changes apply to new recordings; active recordings keep their original deadline.`});return;}
-      if(commandName==="retention"){const days=value("days");if(days>0&&value("confirm")!==true)throw Error("Set confirm:true to enable permanent automatic deletion. Use days:0 to keep cleanup off.");await settingsStore.update(guildID,{retentionDays:days});await interaction.editOriginalMessage({content:days?`Automatic cleanup enabled: completed recordings and their exports older than ${days} days will be permanently deleted. Active, failed and interrupted recordings are preserved.`:"Automatic cleanup is off."});return;}
-      if(commandName==="channelrules"){const mode=value("mode");if(mode==="status"){await interaction.editOriginalMessage({content:settings.autoJoinChannels===undefined?"Automatic joining may use any voice channel when enabled.":settings.autoJoinChannels.length?"Allowed channels: "+settings.autoJoinChannels.map(id=>`<#${id}>`).join(", "):"No channels allowed for automatic joining."});return;}if(mode==="all")await settingsStore.update(guildID,{autoJoinChannels:undefined});else{const channel=value("channel");if(guild.channels.get(channel)?.type!==2)throw Error("Choose a voice channel.");const channels=settings.autoJoinChannels??[];await settingsStore.update(guildID,{autoJoinChannels:mode==="add"?[...new Set([...channels,channel])]:channels.filter(id=>id!==channel)});}await interaction.editOriginalMessage({content:"Channel policy saved. Autojoin and autorecord remain at their current settings."});return;}
+      if(commandName==="retention"){const days=value("days");if(days>0&&value("confirm")!==true)throw new UserError("Set confirm:true to enable permanent automatic deletion. Use days:0 to keep cleanup off.");await settingsStore.update(guildID,{retentionDays:days});await interaction.editOriginalMessage({content:days?`Automatic cleanup enabled: completed recordings and their exports older than ${days} days will be permanently deleted. Active, failed and interrupted recordings are preserved.`:"Automatic cleanup is off."});return;}
+      if(commandName==="channelrules"){const mode=value("mode");if(mode==="status"){await interaction.editOriginalMessage({content:settings.autoJoinChannels===undefined?"Automatic joining may use any voice channel when enabled.":settings.autoJoinChannels.length?"Allowed channels: "+settings.autoJoinChannels.map(id=>`<#${id}>`).join(", "):"No channels allowed for automatic joining."});return;}if(mode==="all")await settingsStore.update(guildID,{autoJoinChannels:undefined});else{const channel=value("channel");if(guild.channels.get(channel)?.type!==2)throw new UserError("Choose a voice channel.");const channels=settings.autoJoinChannels??[];await settingsStore.update(guildID,{autoJoinChannels:mode==="add"?[...new Set([...channels,channel])]:channels.filter(id=>id!==channel)});}await interaction.editOriginalMessage({content:"Channel policy saved. Autojoin and autorecord remain at their current settings."});return;}
       const rules=settings.schedules??[],action=value("action");if(action==="list"){await interaction.editOriginalMessage({content:rules.length?rules.map(rule=>`${rule.id}: <#${rule.channelID}> at ${rule.time} ${rule.timezone}; days ${rule.days.join(",")}; ${rule.durationMinutes} minutes`).join("\n"):"No recurring recordings are enabled.",allowedMentions:{parse:[]}});return;}
-      if(action==="remove"){if(!rules.some(rule=>rule.id===value("id")))throw Error("Schedule not found.");await settingsStore.update(guildID,{schedules:rules.filter(rule=>rule.id!==value("id"))});await interaction.editOriginalMessage({content:"Schedule removed. Any recording it already started will finish at its scheduled end."});return;}
-      if(guild.channels.get(value("channel"))?.type!==2)throw Error("Choose a voice channel.");if(typeof value("days")!=="string"||!value("days").trim())throw Error("Choose weekdays using 0–6 separated by commas.");const rule=newSchedule({channelID:value("channel"),title:value("title")??"Scheduled recording",time:value("time")??"",timezone:value("timezone")??"UTC",days:String(value("days")??"").split(",").map(Number),durationMinutes:value("minutes")});await settingsStore.update(guildID,{schedules:[...rules,rule]});await interaction.editOriginalMessage({content:`Schedule enabled: ${rule.id}. Starts at ${rule.time} ${rule.timezone} and records for ${rule.durationMinutes} minutes.`});return;
+      if(action==="remove"){if(!rules.some(rule=>rule.id===value("id")))throw new UserError("Schedule not found.");await settingsStore.update(guildID,{schedules:rules.filter(rule=>rule.id!==value("id"))});await interaction.editOriginalMessage({content:"Schedule removed. Any recording it already started will finish at its scheduled end."});return;}
+      if(guild.channels.get(value("channel"))?.type!==2)throw new UserError("Choose a voice channel.");if(typeof value("days")!=="string"||!value("days").trim())throw new UserError("Choose weekdays using 0–6 separated by commas.");const rule=newSchedule({channelID:value("channel"),title:value("title")??"Scheduled recording",time:value("time")??"",timezone:value("timezone")??"UTC",days:String(value("days")??"").split(",").map(Number),durationMinutes:value("minutes")});await settingsStore.update(guildID,{schedules:[...rules,rule]});await interaction.editOriginalMessage({content:`Schedule enabled: ${rule.id}. Starts at ${rule.time} ${rule.timezone} and records for ${rule.durationMinutes} minutes.`});return;
     }
     if(commandName==="exportjob"){
-      if(!exportQueue)throw new Error("Export queue unavailable.");const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="job")?.value,action=options.find((option:any)=>option.name==="action")?.value;
-      const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new Error("Export job not found in this server.");await interaction.defer(64);
+      if(!exportQueue)throw new UserError("Export queue unavailable.");const options=interaction.data?.options??[],id=options.find((option:any)=>option.name==="job")?.value,action=options.find((option:any)=>option.name==="action")?.value;
+      const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");await interaction.defer(64);
       if(action==="cancel"){await exportQueue.cancel(id,guildID);await interaction.editOriginalMessage({content:"Cancellation requested. Your original recording is preserved. Files already uploaded to a cloud account are not deleted."});return;}
       if(action==="retry"){const next=await exportQueue.retry(id,guildID);await interaction.editOriginalMessage({content:`Retry queued: ${next.id}${downloads?"\n"+downloads.jobLink(next.id):""}`});return;}
       await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${job.stage??"Waiting"}`});return;
@@ -340,9 +358,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       await interaction.defer(64);
       if(mode==="status"){await interaction.editOriginalMessage({content:rules.length?rules.map(rule=>`Event ${rule.eventID} — auto-stop ${rule.stopOnEnd?"on":"off"}`).join("\n"):"Event-triggered recording is off. No events are selected."});return;}
       const value=String(options.find((option:any)=>option.name==="event")?.value??""),match=/^(?:https:\/\/discord\.com\/events\/(\d+)\/)?(\d{1,25})$/.exec(value);
-      if(!match||(match[1]&&match[1]!==guildID)||!["enable","disable"].includes(mode))throw new Error("Choose an event ID or event link from this server.");
+      if(!match||(match[1]&&match[1]!==guildID)||!["enable","disable"].includes(mode))throw new UserError("Choose an event ID or event link from this server.");
       const eventID=match[2]!;
-      if(mode==="enable"){const event=(await client.getGuildScheduledEvents(guildID)).find(event=>event.id===eventID);if(!event||event.entityType!==2||!(event as unknown as {channel?:{id:string}}).channel||event.status!==1)throw new Error("Select a scheduled voice-channel event that has not started yet.");}
+      if(mode==="enable"){const event=(await client.getGuildScheduledEvents(guildID)).find(event=>event.id===eventID);if(!event||event.entityType!==2||!(event as unknown as {channel?:{id:string}}).channel||event.status!==1)throw new UserError("Select a scheduled voice-channel event that has not started yet.");}
       const next=rules.filter(rule=>rule.eventID!==eventID);if(mode==="enable")next.push({eventID,stopOnEnd:options.find((option:any)=>option.name==="stop_on_end")?.value===true});
       await settingsStore.update(guildID,{eventRecordings:next});await interaction.editOriginalMessage({content:mode==="enable"?"Event recording enabled for that event. Recording starts when Discord marks it active; it stops after 60 seconds without human participants. Stopping when the event ends is optional and defaults off.":"Event recording disabled for that event."});return;
     }
@@ -350,7 +368,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to change or inspect the access policy.",flags:64});return;}
       const options=interaction.data?.options??[],mode=options.find((option:any)=>option.name==="mode")?.value;
       if(mode==="status"){await interaction.createMessage({content:settings.restrictAccess?`Bot controls require role <@&${settings.accessRoleID}>.`:"Bot controls are open to all server members.",flags:64,allowedMentions:{parse:[]}});return;}
-      if(!["everyone","role"].includes(mode))throw new Error("Invalid access mode.");
+      if(!["everyone","role"].includes(mode))throw new UserError("Invalid access mode.");
       const roleID=options.find((option:any)=>option.name==="role")?.value;
       if(mode==="role"&&(!roleID||roleID===guildID||!guild.roles.has(roleID))){await interaction.createMessage({content:"Choose an existing Bot Wrangler role; @everyone cannot be used for restricted access.",flags:64});return;}
       await interaction.defer(64);await settingsStore.update(guildID,mode==="role"?{restrictAccess:true,accessRoleID:roleID}:{restrictAccess:false});
@@ -359,12 +377,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     if(commandName==="title"){
       const options=interaction.data?.options??[],text=validateTitle(options.find((option:any)=>option.name==="text")?.value),id=options.find((option:any)=>option.name==="session")?.value;
-      await interaction.defer(64);await recordings.exclusive(guildID,async()=>{const active=recordings.sessions.get(guildID);if(active&&(!id||active.id===id))await active.setTitle(text);else if(id)await renameSession(config.recordingPath,id,guildID,text);else throw new Error("Start a recording or provide a saved session ID.");});
+      await interaction.defer(64);await recordings.exclusive(guildID,async()=>{const active=recordings.sessions.get(guildID);if(active&&(!id||active.id===id))await active.setTitle(text);else if(id)await renameSession(config.recordingPath,id,guildID,text);else throw new UserError("Start a recording or provide a saved session ID.");});
       await interaction.editOriginalMessage({content:`Recording title saved: ${text}`,allowedMentions:{parse:[]}});return;
     }
     if(commandName==="downloadnames"){
       const style=interaction.data?.options?.find((option:any)=>option.name==="style")?.value;
-      if(!["date","date-channel","original"].includes(style))throw new Error("Invalid naming style.");
+      if(!["date","date-channel","original"].includes(style))throw new UserError("Invalid naming style.");
       await interaction.defer(64);await settingsStore.update(guildID,{downloadNaming:style});
       await interaction.editOriginalMessage({content:`Download names now use ${style==="date"?"the recording start date (UTC)":style==="date-channel"?"the recording start date + channel (UTC)":"original filenames"}. You can also switch styles on each download page.`});return;
     }
@@ -373,7 +391,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(options.find((option:any)=>option.name==="confirm")?.value!==true){await interaction.createMessage({content:"Set confirm:true to permanently delete this session and its exports.",flags:64});return;}
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to delete recordings.",flags:64});return;}
       await interaction.defer(64);
-      if(exportQueue?.busy(id))throw new Error("Wait for this recording's export to finish before deleting it.");
+      if(exportQueue?.busy(id))throw new UserError("Wait for this recording's export to finish before deleting it.");
       if(exportQueue)await exportQueue.whileIdle(id,()=>recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID)));else await recordings.exclusive(guildID,()=>deleteSession(config.recordingPath,id,guildID));
       await interaction.editOriginalMessage({content:"Recording and exports permanently deleted."});return;
     }
@@ -544,11 +562,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const title=proposedTitle===undefined?undefined:validateTitle(proposedTitle);
       await interaction.defer(64);
       try {
-        const session = await recordings.exclusive(guildID, async () => {
-          const connection = await joinVoiceChannel(client, guild, voiceChannelID);
-          const session=await recordings.start(guild, voiceChannelID, connection, () => client.joinVoiceChannel(voiceChannelID, {opusOnly:true,selfDeaf:false}));
-          if(title)await session.setTitle(title);return session;
-        });
+        const session = await recordings.exclusive(guildID, () => startRecording(client, guild, voiceChannelID, title));
         await panels.ensure(interaction.channel.id,session).catch(error=>console.warn("[Panel] Could not post recording panel; /status remains available.",error));
         await interaction.editOriginalMessage({
           content: `**The Witness is recording.**\nVoice channel: <#${voiceChannelID}>\nSession: ${session.id}`
@@ -584,9 +598,10 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
     } catch (error) {
       console.error("[Command]", error);
+      const content=commandErrorMessage(error);
       try {
-        if (interaction.acknowledged) await interaction.editOriginalMessage({ content: "The command failed. Check the bot logs and try again." });
-        else await interaction.createMessage({ content: "The command failed. Check the bot logs and try again.", flags: 64 });
+        if (interaction.acknowledged) await interaction.editOriginalMessage({ content, allowedMentions: { parse: [] } });
+        else await interaction.createMessage({ content, flags: 64, allowedMentions: { parse: [] } });
       } catch (responseError) { console.error("[Command] Could not send error response:", responseError); }
     }
   });

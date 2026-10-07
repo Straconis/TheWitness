@@ -9,6 +9,8 @@ test('recovery salvages only complete checksummed pairs and leaves original audi
   await session.append(Buffer.from([0xf8,0xff,0xfe]),'alice','Alice',100);
   await session.append(Buffer.from([0xf8,0xff,0xfe]),'alice','Alice',1060);
   await session.note('Recovered note','alice');await session.close();
+  const cues={version:1,sessionID:session.id,cues:[{id:'cue',sessionID:session.id,kind:'start',targetUTC:0,seconds:0.01,duration:0.3,state:'captured'}]};
+  await writeFile(path.join(session.directory,'sync-cues.json'),JSON.stringify(cues));
   const file=path.join(session.directory,'audio.ogg.data');const audio=await readFile(file);
   // Remove the final note, then truncate the second packet timestamp page.
   let offset=0;const ends=[];
@@ -23,6 +25,12 @@ test('recovery salvages only complete checksummed pairs and leaves original audi
   assert.deepEqual(await readFile(file),broken);
   assert.equal(JSON.parse(await readFile(path.join(session.directory,'session.json'))).state,'interrupted');
   const output=await exportSession(root,id);assert.ok((await readFile(path.join(output,'track-1.ogg'))).length>0);
+  assert.deepEqual(JSON.parse(await readFile(path.join(output,'manifest.json'))).syncCues.cues.map(cue=>cue.id),['cue']);
+  await writeFile(path.join(session.directory,'sync-cues.json'),'{ truncated');
+  const recoveredWithoutCues=await recoverSession(root,session.id,'guild');
+  const exportWithoutCues=await exportSession(root,recoveredWithoutCues);
+  assert.equal(JSON.parse(await readFile(path.join(exportWithoutCues,'manifest.json'))).syncCues,undefined);
+  assert.equal(await readFile(path.join(session.directory,'sync-cues.json'),'utf8'),'{ truncated');
   await assert.rejects(recoverSession(root,id,'guild'),/Only interrupted/);
   const corrupt=Buffer.from(broken);corrupt[28]^=1;await writeFile(file,corrupt);
   await assert.rejects(recoverSession(root,session.id,'guild'),/No complete/);

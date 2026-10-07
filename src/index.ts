@@ -1,3 +1,4 @@
+import {shutdownInOrder} from "./shutdown";
 import { RetentionRunner } from "./automation/retention";
 import { ExportQueue } from "./exports/jobs";
 import { DownloadService } from "./downloads/service";
@@ -5,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 
 import { markInterruptedSessions } from "./recording/recovery";
 import { config } from "./config";
-import { createDiscordClient, recordings, settingsStore, storageMonitor, closeRecordingPanels } from "./discord/client";
+import { createDiscordClient, recordings, settingsStore, storageMonitor, closeAutomation, closePanels } from "./discord/client";
 
 async function main(): Promise<void> {
   console.log(`The Witness v${require("../package.json").version}`);
@@ -36,9 +37,15 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     storageMonitor.close();
-    try { await retention.close(); await closeRecordingPanels(); await recordings.shutdown(); await exportQueue.close(); }
-    catch (error) { console.error("[Shutdown]", error); process.exitCode = 1; }
-    finally { client.disconnect({ reconnect: false }); await downloads?.close(); }
+    await shutdownInOrder([
+      {name:"retention",close:()=>retention.close()},
+      {name:"automation",close:()=>closeAutomation()},
+      {name:"recordings",close:()=>recordings.shutdown()},
+      {name:"panels",close:()=>closePanels()},
+      {name:"exports",close:()=>exportQueue.close()},
+      {name:"Discord",close:()=>client.disconnect({reconnect:false})},
+      {name:"downloads",close:()=>downloads?.close()}
+    ],(name,error)=>{console.error(`[Shutdown] ${name}:`,error);process.exitCode=1;});
   };
   process.once("SIGINT", () => { void shutdown(); });
   process.once("SIGTERM", () => { void shutdown(); });

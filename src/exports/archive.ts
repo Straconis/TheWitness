@@ -1,14 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-
-function checksum(bytes: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
+import { crc32 } from "node:zlib";
 
 /** ZIP STORE archives for bounded Discord attachments; no host zip utility needed. */
 export async function archiveExport(directory: string, limit: number): Promise<Buffer> {
@@ -24,7 +16,7 @@ export async function archiveExport(directory: string, limit: number): Promise<B
     if (total > limit || total > 0xffffffff || count >= 65535) throw new Error("Export is too large for a Discord attachment; the files remain saved on the host.");
     const data = await readFile(path.join(directory, entry.name));
     if (data.length !== size) throw new Error("Export changed while creating download.");
-    const crc = checksum(data);
+    const crc = crc32(data);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50,0); local.writeUInt16LE(20,4);
     local.writeUInt16LE(0x21,12); // 1980-01-01, valid ZIP date

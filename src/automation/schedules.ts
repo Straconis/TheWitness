@@ -1,3 +1,4 @@
+import {UserError} from "../errors";
 import { randomUUID } from "node:crypto";
 import { readFile,writeFile,rename } from "node:fs/promises";
 import path from "node:path";
@@ -5,8 +6,8 @@ import type { RecordingManager } from "../recording/manager";
 import type { SettingsStore } from "../storage/settings";
 export interface RecordingSchedule {id:string;channelID:string;title:string;days:number[];time:string;timezone:string;durationMinutes:number}
 export function validateSchedule(rule:RecordingSchedule):void{
- if(!rule||!/^[a-f0-9-]{36}$/i.test(rule.id)||!/^\d{1,25}$/.test(rule.channelID)||typeof rule.title!=="string"||rule.title.length>120||/[\x00-\x1f\x7f]/.test(rule.title)||!Array.isArray(rule.days)||!rule.days.length||rule.days.some(day=>!Number.isInteger(day)||day<0||day>6)||new Set(rule.days).size!==rule.days.length||!/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.time)||typeof rule.timezone!=="string"||!Number.isInteger(rule.durationMinutes)||rule.durationMinutes<1||rule.durationMinutes>1440)throw Error("Invalid recording schedule. Choose weekdays, HH:MM, a time zone and 1–1440 minutes.");
- try{new Intl.DateTimeFormat("en-US",{timeZone:rule.timezone}).format();}catch{throw Error("Unknown time zone. Use a name such as America/New_York or UTC.");}
+ if(!rule||!/^[a-f0-9-]{36}$/i.test(rule.id)||!/^\d{1,25}$/.test(rule.channelID)||typeof rule.title!=="string"||rule.title.length>120||/[\x00-\x1f\x7f]/.test(rule.title)||!Array.isArray(rule.days)||!rule.days.length||rule.days.some(day=>!Number.isInteger(day)||day<0||day>6)||new Set(rule.days).size!==rule.days.length||!/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.time)||typeof rule.timezone!=="string"||!Number.isInteger(rule.durationMinutes)||rule.durationMinutes<1||rule.durationMinutes>1440)throw new UserError("Invalid recording schedule. Choose weekdays, HH:MM, a time zone and 1–1440 minutes.");
+ try{new Intl.DateTimeFormat("en-US",{timeZone:rule.timezone}).format();}catch{throw new UserError("Unknown time zone. Use a name such as America/New_York or UTC.");}
 }
 export function newSchedule(input:Omit<RecordingSchedule,"id">):RecordingSchedule{const rule={...input,id:randomUUID()};validateSchedule(rule);return rule;}
 function localTime(now:Date,zone:string){const parts=new Intl.DateTimeFormat("en-US",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit",weekday:"short",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(now);const value=(type:string)=>parts.find(part=>part.type===type)!.value;return {date:value("year")+"-"+value("month")+"-"+value("day"),day:["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(value("weekday")),time:value("hour")+":"+value("minute")};}
