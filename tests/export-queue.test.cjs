@@ -51,3 +51,13 @@ test('one concurrent initial-save failure does not reset another running export'
  try{const a=await recording(root,'a'),b=await recording(root,'b');await queue.load();const original=queue.save.bind(queue);queue.save=async job=>{if(job.sessionID===a&&job.state==='running'){entered=true;await gate;throw Error('Storage unavailable for first job');}return original(job);};const first=await queue.enqueue(a,'a','wav');await until(()=>entered);const second=await queue.enqueue(b,'b','wav');await until(()=>secondStarted);release();await until(()=>queue.cooldown);assert.equal(first.state,'queued');assert.equal(second.state,'running');assert.ok(queue.active.has(second.id));queue.save=original;
  }finally{release();await queue.close();await rm(root,{recursive:true,force:true});}
 });
+test('queued export failures reach operator logs without a Discord attachment waiter',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-export-failure-log-'));let queue;const errors=[],original=console.error;
+ try{const session=await recording(root,'guild');queue=new ExportQueue(root,async()=>{throw Error('Synthetic encoder failure');});await queue.load();console.error=(...args)=>errors.push(args);const job=await queue.enqueue(session,'guild','wav');await until(()=>job.state==='failed');await queue.close();assert.ok(errors.some(args=>String(args[0]).includes(job.id)&&/failed/i.test(String(args[0]))&&args.some(arg=>String(arg).includes('Synthetic encoder failure'))),'Failed queue job must identify itself and its error in operator logs');}
+ finally{console.error=original;await queue?.close();await rm(root,{recursive:true,force:true});}
+});
+test('operator failure logs exclude normal export cancellation and shutdown',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-export-normal-stop-'));const errors=[],original=console.error;let queue;
+ try{const session=await recording(root,'guild');queue=new ExportQueue(root,async(_root,_id,options)=>{await new Promise((resolve,reject)=>{if(options.signal.aborted)reject(options.signal.reason);else options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});return root;});await queue.load();console.error=(...args)=>errors.push(args);const first=await queue.enqueue(session,'guild','wav');await until(()=>queue.active.has(first.id));await queue.cancel(first.id,'guild');await until(()=>first.state==='cancelled');const second=await queue.enqueue(session,'guild','wav');await until(()=>queue.active.has(second.id));await queue.close();assert.equal(second.state,'queued');assert.ok(!errors.some(args=>/Job .* failed/.test(String(args[0]))));}
+ finally{console.error=original;await queue?.close();await rm(root,{recursive:true,force:true});}
+});

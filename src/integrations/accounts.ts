@@ -11,9 +11,16 @@ const endpoints={
 };
 type Credentials={accessToken:string;refreshToken?:string;expiresAt:number};
 type Pending={provider:CloudProvider;redirect:string;verifier:string;expiresAt:number};
+// Web callbacks and export workers create separate instances for the same account files.
+const credentialOperations=new Map<string,Promise<unknown>>();
 /** Owner accounts only. Credentials never enter manifests or browser responses. */
 export class CloudAccounts {
- private locks=new Map<CloudProvider,Promise<unknown>>();
+ private async exclusive<T>(provider:CloudProvider,action:()=>Promise<T>):Promise<T>{
+  const key=path.resolve(this.file(provider));
+  const task=(credentialOperations.get(key)??Promise.resolve()).catch(()=>{}).then(action);
+  credentialOperations.set(key,task);
+  try{return await task;}finally{if(credentialOperations.get(key)===task)credentialOperations.delete(key);}
+ }
  constructor(private root:string,private overrides:Partial<Record<CloudProvider,{authorize?:string;token?:string}>>={}){}
  private directory(){return path.join(this.root,"private-accounts");}
  private file(provider:CloudProvider){if(!providers.includes(provider))throw Error("Unknown cloud provider.");return path.join(this.directory(),provider+".json");}
@@ -47,19 +54,21 @@ export class CloudAccounts {
   try{pending=JSON.parse(await readFile(file,"utf8"));await rm(file);}catch{throw Error("Account connection expired or was already used. Start again.");}
   if(pending.expiresAt<Date.now()||pending.redirect!==origin+"/oauth/callback"||!providers.includes(pending.provider))throw Error("Account connection expired or has the wrong address.");
   const params=new URLSearchParams({grant_type:"authorization_code",code,redirect_uri:pending.redirect});if(pending.provider!=="box")params.set("code_verifier",pending.verifier);
-  const credentials=await this.exchange(pending.provider,params);const previous=await this.credentials(pending.provider);credentials.refreshToken??=previous?.refreshToken;
-  if(!credentials.refreshToken)throw Error("No refresh token was supplied. Reconnect with offline access enabled.");
-  await this.save(this.file(pending.provider),credentials);return pending.provider;
+  return this.exclusive(pending.provider,async()=>{
+   const credentials=await this.exchange(pending.provider,params);const previous=await this.credentials(pending.provider);credentials.refreshToken??=previous?.refreshToken;
+   if(!credentials.refreshToken)throw Error("No refresh token was supplied. Reconnect with offline access enabled.");
+   await this.save(this.file(pending.provider),credentials);return pending.provider;
+  });
  }
  async token(provider:CloudProvider,signal?:AbortSignal):Promise<string>{
-  const task=(this.locks.get(provider)??Promise.resolve()).catch(()=>{}).then(async()=>{
+  return this.exclusive(provider,async()=>{
    signal?.throwIfAborted();const config=this.config(provider),saved=await this.credentials(provider);
    if(saved&&saved.expiresAt>Date.now()+60000)return saved.accessToken;
    const refresh=saved?.refreshToken??config.refresh;
    if(!refresh){if(!saved&&config.access)return config.access;throw Error("Cloud account needs to be connected again.");}
    const next=await this.exchange(provider,new URLSearchParams({grant_type:"refresh_token",refresh_token:refresh}),signal);next.refreshToken??=refresh;
    await this.save(this.file(provider),next);return next.accessToken;
-  });this.locks.set(provider,task);try{return await task;}finally{if(this.locks.get(provider)===task)this.locks.delete(provider);}
+  });
  }
- async disconnect(provider:CloudProvider){await (this.locks.get(provider)??Promise.resolve()).catch(()=>{});await rm(this.file(provider),{force:true});}
+ async disconnect(provider:CloudProvider){await this.exclusive(provider,()=>rm(this.file(provider),{force:true}));}
 }
