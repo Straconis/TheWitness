@@ -60,7 +60,7 @@ export class DownloadService {
   }
   private html(response:ServerResponse,html:string):void {
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; connect-src 'self'; worker-src blob:; media-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'");
-    response.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});response.end(html);
+    response.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});response.end(html.replace(/<title>/i,'<link rel="icon" type="image/png" href="/assets/witness-icon.png"><link rel="apple-touch-icon" href="/assets/witness-icon.png"><title>'));
   }
   private json(response:ServerResponse,status:number,value:unknown):void {response.writeHead(status,{"Content-Type":"application/json"});response.end(JSON.stringify(value));}
   /** Collect bytes, not decoded chunks, so multi-byte characters split across chunks survive. */
@@ -128,6 +128,12 @@ export class DownloadService {
     response.setHeader("X-Content-Type-Options","nosniff");
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
+    if (["/assets/witness-icon.png","/favicon.ico","/apple-touch-icon.png"].includes(url.pathname)) {
+      if(request.method!=="GET"&&request.method!=="HEAD")return this.error(response,405,"Method not allowed.");
+      const ico=url.pathname==="/favicon.ico",icon=await readFile(path.resolve(__dirname,"../../docs/images/",ico?"favicon.ico":"witness-icon.png"));
+      response.writeHead(200,{"Content-Type":ico?"image/vnd.microsoft.icon":"image/png","Content-Length":icon.length});
+      response.end(request.method==="HEAD"?undefined:icon);return;
+    }
     if (url.pathname === "/assets/witness-banner.png") {
       if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
       const banner = await readFile(path.resolve(__dirname,"../../docs/images/discord_banner.png"));
