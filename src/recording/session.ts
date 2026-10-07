@@ -20,7 +20,7 @@ interface Track { id: string; username: string; track: number; packet: number; p
 
 export class RecordingSession {
   title?:string;
-  stopReason?: "duration-limit" | "empty-channel" | "low-disk";
+  stopReason?: "duration-limit" | "empty-channel" | "low-disk" | "disconnected";
   onDurationLimit?: () => Promise<void>;
   onDurationWarning?: (minutes:number) => Promise<void>;
   private warningTimers:NodeJS.Timeout[] = [];
@@ -43,6 +43,12 @@ export class RecordingSession {
   private notePacket = 0;
   private start = process.hrtime.bigint();
   private files = new Map<string, FileHandle>();
+  private browserGuests=new Set<string>();
+  claimBrowserGuest(token:string):string{
+    if(!/^[a-f0-9]{32}$/.test(token))throw new Error("Invalid guest token.");
+    if(!this.browserGuests.has(token)&&this.browserGuests.size>=16)throw new Error("This recording has reached its 16 browser guest tracks.");
+    this.browserGuests.add(token);return "browser-"+token;
+  }
   private queue: Promise<void> = Promise.resolve();
   private pendingBytes = 0;
   private closing?: Promise<void>;
@@ -86,11 +92,11 @@ export class RecordingSession {
     }
   }
 
-  private async write(name: string, bytes: Buffer): Promise<void> {
+  private async write(name: string, bytes: Buffer, position?:number): Promise<void> {
     const file = this.files.get(name)!;
     let offset = 0;
     while (offset < bytes.length) {
-      const { bytesWritten } = await file.write(bytes, offset, bytes.length - offset, null);
+      const { bytesWritten } = await file.write(bytes, offset, bytes.length - offset, position===undefined?null:position+offset);
       if (!bytesWritten) throw new Error("Storage write made no progress.");
       offset += bytesWritten;
     }
@@ -101,7 +107,7 @@ export class RecordingSession {
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID, channelName: this.channelName,
       startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats, guestFramesDropped: this.guestFramesDropped || undefined,
-      durationHours:this.durationHours, diagnosticStopReason:this.stopReason==="duration-limit"?"max_duration":this.stopReason, error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
+      durationSamples:Number(this.elapsedSamples()),durationHours:this.durationHours, diagnosticStopReason:this.stopReason==="duration-limit"?"max_duration":this.stopReason, error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
   }
@@ -115,7 +121,7 @@ export class RecordingSession {
 
   elapsedSamples(): bigint { return (process.hrtime.bigint() - this.start) * 48000n / 1000000000n; }
 
-  append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint, originalPCM?:Buffer): Promise<void> {
+  append(data: Buffer, userID: string, username: string, timestamp = 0, arrival?: bigint, originalPCM?:Buffer,pcmEpoch=false): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
     // Guard every input path even if the deadline timer is delayed or a stop is queued.
     const capturedTime = arrival ?? this.elapsedSamples();
@@ -145,7 +151,11 @@ export class RecordingSession {
       if(pcm){
         if(pcm.length%4!==0)throw new Error("Invalid stereo PCM frame.");
         if(!track.pcmFile){track.pcmFile=`browser-track-${track.track}.pcm`;track.pcmStart=Number(time);track.pcmSamples=0;this.files.set(track.pcmFile,await open(path.join(this.directory,track.pcmFile),"wx"));}
-        await this.write(track.pcmFile,pcm);track.pcmSamples!+=pcm.length/4;
+        // Reconnecting the same guest keeps one PCM track and its timeline gap.
+        const gap=Number(time)-(track.pcmStart!+track.pcmSamples!);
+        if(pcmEpoch&&gap>=960)track.pcmSamples!+=Math.floor(gap/960)*960;
+        // Positional writes leave reconnect silence as sparse holes, not physical zeros.
+        await this.write(track.pcmFile,pcm,track.pcmSamples!*4);track.pcmSamples!+=pcm.length/4;
       }
       // Craig stores arrival time and the original RTP timestamp in paired pages.
       await this.write("data", encodeOggPage(time, track.track, track.packet++, packet));

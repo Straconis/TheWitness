@@ -17,6 +17,7 @@ export class RecordingManager {
  private cleanup=new Map<string,()=>void>();private buffers=new Map<string,PacketBuffer>();
  private locks=new Map<string,Promise<unknown>>();private reconnecting=new Map<string,AbortController>();private shuttingDown=false;
  readonly syncSessions=new Map<string,SessionSync>();
+ onDisconnected?: (session:RecordingSession)=>Promise<void>;
  constructor(private root:string,private retryDelays=DEFAULT_RECONNECT_DELAYS,private settings?:SettingsStore,private diskCritical:()=>Promise<boolean>|boolean=()=>false){}
  exclusive<T>(guildID:string,action:()=>Promise<T>):Promise<T>{
   if(this.shuttingDown)return Promise.reject(new Error("The Witness is shutting down."));
@@ -29,8 +30,10 @@ export class RecordingManager {
   if(existing){if(existing.channelID!==channelID)throw new Error("Stop the existing recording before changing channels.");return existing;}
   await assertDeploymentIdle(this.root);
   if(await this.diskCritical())throw Error("Disk space is critically low. Free up space before starting a recording.");
+  if(this.shuttingDown)throw Error("The Witness is shutting down.");
+  await assertDeploymentIdle(this.root);
   const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,this.settings?.get(guild.id).recordingDurationHours);
-  try{this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
+  try{if(this.shuttingDown)throw Error("The Witness is shutting down.");await assertDeploymentIdle(this.root);this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
   session.onDurationWarning=async minutes=>{if(this.sessions.get(guild.id)===session)await this.onDurationWarning?.(session,minutes);};
   session.onDurationLimit=async()=>{
@@ -55,6 +58,12 @@ export class RecordingManager {
   const onError=(error:Error)=>console.error(`[Voice ${session.id}]`,error);
   const onDisconnect=(error?:Error)=>{
    if(this.reconnecting.has(guild.id)||this.shuttingDown)return;
+   if(!error){
+    this.cleanup.get(guild.id)?.();this.cleanup.delete(guild.id);
+    session.stopReason="disconnected";
+    void this.exclusive(guild.id,async()=>{if(this.sessions.get(guild.id)!==session)return;try{await this.stop(guild.id);}finally{await this.onDisconnected?.(session);}}).catch(error=>console.error("[Voice] Clean-disconnect finalization failed:",error));
+    return;
+   }
    const controller=new AbortController();this.reconnecting.set(guild.id,controller);
    session.voiceState="reconnecting";
    this.cleanup.get(guild.id)?.();this.cleanup.delete(guild.id);
@@ -87,7 +96,7 @@ export class RecordingManager {
  async stop(guildID:string,error?:Error):Promise<RecordingSession|undefined>{
   this.cancelReconnect(guildID);const session=this.sessions.get(guildID);if(!session)return;
   session.cancelDurationTimers();
-  try{await this.syncSessions.get(guildID)?.stop(!error&&!this.shuttingDown&&session.stopReason!=="duration-limit"&&session.stopReason!=="low-disk");}catch(cueError){console.warn('[Sync] End cue failed:',cueError);}
+  try{await this.syncSessions.get(guildID)?.stop(!error&&!this.shuttingDown&&session.stopReason!=="duration-limit"&&session.stopReason!=="low-disk"&&session.stopReason!=="disconnected");}catch(cueError){console.warn('[Sync] End cue failed:',cueError);}
   this.cleanup.get(guildID)?.();this.cleanup.delete(guildID);
   const buffer=this.buffers.get(guildID);this.buffers.delete(guildID);let finalError=error;
   for(const packet of buffer?.flush()??[]){try{await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival);}catch(error){finalError??=error as Error;}}

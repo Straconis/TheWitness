@@ -82,7 +82,7 @@ test('voice reconnect keeps trying well past the old three attempts, and the def
     const session = await manager.start({ id: 'guild', members: new Map() }, 'voice', first.connection, async () => {
       attempts++; if (attempts <= 5) throw new Error('voice server unavailable'); return voice().connection;
     });
-    first.connection.emit('disconnect');
+    first.connection.emit('disconnect',new Error('Network lost'));
     await until(() => attempts === 6 && session.voiceState === 'connected');
     assert.equal(session.state, 'recording', 'a five-failure outage must not fail the session');
   } finally { await manager.shutdown(); await rm(root, { recursive: true, force: true }); }

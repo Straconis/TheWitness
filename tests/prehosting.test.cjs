@@ -15,7 +15,7 @@ test('browser WAV and FLAC preserve every original PCM sample and crop accuratel
 test('exhausted reconnect attempts finalize a failed recording with original audio intact',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-retry-'));const manager=new RecordingManager(root,[0,0]);
  try{const receiver=new EventEmitter(),voice=new EventEmitter();voice.receive=()=>receiver;voice.disconnect=()=>{};let attempts=0;
- const session=await manager.start({id:'guild',members:new Map()},'voice',voice,async()=>{attempts++;throw Error('offline');});receiver.emit('data',Buffer.from([0xf8,0xff,0xfe]),'user',0);voice.emit('disconnect');
+ const session=await manager.start({id:'guild',members:new Map()},'voice',voice,async()=>{attempts++;throw Error('offline');});receiver.emit('data',Buffer.from([0xf8,0xff,0xfe]),'user',0);voice.emit('disconnect',new Error('Network lost'));
  for(let i=0;i<100&&manager.sessions.size;i++)await new Promise(r=>setTimeout(r,10));assert.equal(attempts,2);assert.equal(manager.sessions.size,0);const metadata=JSON.parse(await readFile(path.join(session.directory,'session.json')));assert.equal(metadata.state,'failed');assert.equal(metadata.packets,1);assert.ok((await readFile(path.join(session.directory,'audio.ogg.data'))).length>0);
  }finally{await manager.shutdown();await rm(root,{recursive:true,force:true});}
 });

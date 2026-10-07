@@ -1,3 +1,4 @@
+import {protectRecordingSpace} from "../exports/storage";
 import {UserError,commandErrorMessage} from "../errors";
 import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
 import { helpMessage,helpTopics } from "./help";
@@ -24,7 +25,13 @@ import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
 import type { RecordingSession } from "../recording/session";
 
-export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes,undefined,undefined,config.lowDiskCriticalBytes,()=>{void recordings.stopForLowDisk().catch(error=>console.error("[Storage] Recording stop failed.",error));});
+let storageExports:ExportQueue|undefined;let criticalAction:Promise<void>|undefined;
+export function setStorageExportQueue(queue:ExportQueue):void{storageExports=queue;}
+export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes,undefined,undefined,config.lowDiskCriticalBytes,()=>{
+ if(criticalAction)return;
+ const action=protectRecordingSpace(storageExports,()=>storageMonitor.check(),()=>recordings.stopForLowDisk()).catch(error=>console.error("[Storage] Disk protection failed.",error));criticalAction=action;
+ void action.finally(()=>{if(criticalAction===action)criticalAction=undefined;});
+});
 
 
 export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
@@ -40,18 +47,18 @@ export async function closeAutomation():Promise<void>{if(eventOccupancyTimer)cle
 export async function closePanels():Promise<void>{await recordingPanels?.close();}
 export async function closeRecordingPanels():Promise<void>{try{await closeAutomation();}finally{await closePanels();}}
 const exportJobs = new Set<string>();
-const queuePositionText=(position:number)=>`Waiting in the export queue: position ${position}. It starts automatically when earlier exports finish.`;
+const queuePositionText=(position:number,stage?:string)=>stage?.startsWith("Waiting for disk space")?`${stage} Queue position ${position}.`:`Waiting in the export queue: position ${position}. It starts automatically when earlier exports finish.`;
 /** Discord-attachment exports wait their turn in the shared queue; Discord allows message edits for 15 minutes. */
-async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number|undefined)=>Promise<unknown>):Promise<ExportJob|undefined>{
-  let shown:number|undefined|null=null;const deadline=Date.now()+14*60*1000;
+async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number|undefined,stage?:string)=>Promise<unknown>):Promise<ExportJob|undefined>{
+  let shownStage="";let shown:number|undefined|null=null;const deadline=Date.now()+14*60*1000;
   for(;;){
     if(queue.stopping||Date.now()>=deadline)return undefined;
     const job=queue.get(id);if(!job)throw new Error("Export job disappeared.");
     if(["completed","failed","cancelled"].includes(job.state))return job;
     const position=queue.position(id);
-    if(position!==shown && (position!==undefined || job.state==="running")){
-      shown=position;
-      await onPosition(position).catch(error=>console.warn("[Export] Could not update queue position:",error));
+    if((position!==shown||job.stage!==shownStage) && (position!==undefined || job.state==="running")){
+      shown=position;shownStage=job.stage??"";
+      await onPosition(position,job.stage).catch(error=>console.warn("[Export] Could not update queue position:",error));
     }
     await delay(2000,undefined,{ref:false});
   }
@@ -200,12 +207,14 @@ async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID:
 
 export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
+    allowedMentions:{everyone:false,roles:false,users:false},
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
   const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
   const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
 
+  recordings.onDisconnected=async session=>{const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);await panels.update();};
   recordings.onDurationWarning=async(session,minutes)=>{
     await client.createMessage(session.channelID,{content:`Recording remains active: ${minutes===60?"1 hour":`${minutes} minutes`} remaining. It will automatically stop at <t:${Math.floor((Date.parse(session.startedAt)+session.maxDurationMs)/1000)}:F> and save normally. Manage Server admins can use /recordinglimit hours to change the maximum for future recordings.`,allowedMentions:{everyone:false,roles:false,users:false}});
   };
@@ -251,8 +260,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   // Servers that add the bot while it is running need commands without waiting for a restart.
   client.on("guildCreate", guild => { void registerCommands(client, [guild]); });
 
-  client.on("voiceChannelJoin", async (member, channel) => {
-    if (member.bot || member.id === client.user.id) {
+  const autoJoin=async (member:Eris.Member, channel:Eris.VoiceChannel|Eris.StageChannel) => {
+    if (channel.type!==2 || member.bot || member.id === client.user.id) {
       return;
     }
 
@@ -283,7 +292,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     } catch (error) {
       console.error("[AutoJoin] Failed:", error);
     }
-  });
+  };
+  client.on("voiceChannelJoin",autoJoin);
+  client.on("voiceChannelSwitch",(member,channel)=>{void autoJoin(member,channel);});
 
   client.on("interactionCreate", async (interaction: any) => {
     const wranglerSettings=interaction.guildID?settingsStore.get(interaction.guildID):undefined;
@@ -367,7 +378,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");await interaction.defer(64);
       if(action==="cancel"){await exportQueue.cancel(id,guildID);await interaction.editOriginalMessage({content:"Cancellation requested. Your original recording is preserved. Files already uploaded to a cloud account are not deleted."});return;}
       if(action==="retry"){const next=await exportQueue.retry(id,guildID);await interaction.editOriginalMessage({content:`Retry queued: ${next.id}${downloads?"\n"+downloads.jobLink(next.id):""}`});return;}
-      const position=exportQueue.position(job.id);await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${position?queuePositionText(position):job.stage??"Waiting"}`});return;
+      const position=exportQueue.position(job.id);await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${position?queuePositionText(position,job.stage):job.stage??"Waiting"}`});return;
     }
     if(commandName==="eventrecord"){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to configure event recording.",flags:64});return;}
@@ -416,8 +427,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(!downloads) {await interaction.createMessage({content:"Configure the public download service to enable browser access.",flags:64});return;}
       const session=recordings.sessions.get(guildID);
       if(commandName==="webapp"&&!session){await interaction.createMessage({content:"Start a recording before connecting a browser microphone.",flags:64});return;}
-      const link=commandName==="webapp"?downloads.browserLink(session!.id):downloads.dashboardLink(guildID);
-      await interaction.createMessage({content:`[Open ${commandName==="webapp"?"browser recording":"your dashboard"}](${link})\nThis private link expires in 24 hours.`,flags:64});return;
+      if(commandName==="dashboard"&&!interaction.member?.permissions?.has("manageGuild"))throw new UserError("Manage Server permission is required to open the server dashboard.");
+      const link=commandName==="webapp"?downloads.browserLink(session!.id):downloads.dashboardLink(guildID,true);
+      await interaction.createMessage({content:`[Open ${commandName==="webapp"?"browser recording":"your dashboard"}](${link})\nThis private link expires in 24 hours.${commandName==="dashboard"?" Share this manager link only with server managers.":""}`,flags:64});return;
     }
     if (commandName === "recover") {
       await interaction.defer(64);
@@ -470,7 +482,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
           const upload=options.find((option:any)=>option.name==="upload")?.value;
           const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat});const position=exportQueue.position(job.id);
-          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}${position?"\n"+queuePositionText(position):""}\n[Open export status](${downloads.jobLink(job.id)})`});return;
+          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}${position?"\n"+queuePositionText(position,job.stage):""}\n[Open export status](${downloads.jobLink(job.id)})`});return;
         }
         if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
           await interaction.editOriginalMessage({content:"Enable the download service to use queued transcription or cloud uploads."});return;
@@ -479,7 +491,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if (exportQueue) {
           const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat });
           await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`}).catch((error:unknown) => console.warn("[Export] Could not update reply:", error));
-          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${position===undefined?"Your export is now processing.":queuePositionText(position)}` }));
+          const job = await awaitExport(exportQueue, queued.id, (position,stage) => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${position===undefined?"Your export is now processing.":queuePositionText(position,stage)}` }));
           if(!job){
             console.warn(`[Export] Attachment delivery stopped for job ${queued.id}; its queued export is preserved.`);
             const reason = exportQueue.stopping
@@ -508,7 +520,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
           ? "This export is too large to attach in Discord. It is saved on the host; enable the download service to retrieve large recordings."
-          : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues." });
+          : (error instanceof UserError ? commandErrorMessage(error) : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues.") });
       } finally { if (!exportQueue) exportJobs.delete(guildID); }
       return;
     }
@@ -536,6 +548,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     if (commandName === "autojoin") {
       const mode = interaction.data?.options?.[0]?.value;
+      if(["enable","disable"].includes(mode)&&!interaction.member?.permissions?.has("manageGuild"))throw new UserError("Manage Server permission is required to change automatic joining or recording.");
 
       if (mode === "enable") {
         await settingsStore.update(guildID, { autoJoin: true });
@@ -561,6 +574,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     if (commandName === "autorecord") {
       const mode = interaction.data?.options?.[0]?.value;
+      if(["enable","disable"].includes(mode)&&!interaction.member?.permissions?.has("manageGuild"))throw new UserError("Manage Server permission is required to change automatic joining or recording.");
 
       if (mode === "enable") {
         await settingsStore.update(guildID, { autoRecord: true, autoJoin: true });

@@ -43,20 +43,23 @@ export class DownloadService {
   private server?: Server;
   private sockets = new WebSocketServer({ noServer:true, maxPayload:1924 });
   private guestCounts = new Map<string,number>();
+  private activeGuests=new Map<string,Set<string>>();
   private space?:StorageMonitor;
   private queue?:ExportQueue;
   private settings?:SettingsStore;
   private manager?:RecordingManager;
   attach(queue:ExportQueue,settings:SettingsStore,manager:RecordingManager,space?:StorageMonitor):void {this.space=space;this.queue=queue;this.settings=settings;this.manager=manager;}
   private liveSession(id:string):RecordingSession|undefined {return [...(this.manager?.sessions.values() ?? [])].find(session=>session.id===id);}
-  private issue(route:string,lifetimeSeconds=86400):string {const expires=String(Math.floor(Date.now()/1000)+lifetimeSeconds);return `${this.publicURL}${route}?expires=${expires}&signature=${this.signature(route,expires)}`;}
+  private issue(route:string,lifetimeSeconds=86400,manager=false):string {const expires=String(Math.floor(Date.now()/1000)+lifetimeSeconds);return `${this.publicURL}${route}?expires=${expires}&signature=${this.signature(route+(manager?"\nmanager":""),expires)}${manager?"&manager=1":""}`;}
   recordingLink(id:string,lifetimeSeconds=86400):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/recording/${id}`,lifetimeSeconds);}
   browserLink(id:string):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/browser/${id}`);}
   jobLink(id:string):string {if(!sessionIDPattern.test(id))throw new Error("Invalid job.");return this.issue(`/job/${id}`);}
-  dashboardLink(guildID:string):string {if(!/^[a-zA-Z0-9_-]{1,64}$/.test(guildID))throw new Error("Invalid server.");return this.issue(`/dashboard/${guildID}`);}
+  dashboardLink(guildID:string,manager=false):string {if(!/^[a-zA-Z0-9_-]{1,64}$/.test(guildID))throw new Error("Invalid server.");return this.issue(`/dashboard/${guildID}`,86400,manager);}
   private authorized(url:URL,route:string):boolean {
+    if(route.startsWith("/dashboard/")&&url.searchParams.has("manager")&&url.searchParams.get("manager")!=="1")return false;
+    const scoped=route+(route.startsWith("/dashboard/")&&url.searchParams.get("manager")==="1"?"\nmanager":"");
     const expires=url.searchParams.get("expires") ?? "",signature=url.searchParams.get("signature") ?? "";
-    return /^\d{1,12}$/.test(expires)&&Number(expires)>Math.floor(Date.now()/1000)&&/^[a-f0-9]{64}$/.test(signature)&&timingSafeEqual(Buffer.from(signature,"hex"),Buffer.from(this.signature(route,expires),"hex"));
+    return /^\d{1,12}$/.test(expires)&&Number(expires)>Math.floor(Date.now()/1000)&&/^[a-f0-9]{64}$/.test(signature)&&timingSafeEqual(Buffer.from(signature,"hex"),Buffer.from(this.signature(scoped,expires),"hex"));
   }
   private html(response:ServerResponse,html:string):void {
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' blob:; connect-src 'self'; worker-src blob:; media-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'");
@@ -70,11 +73,11 @@ export class DownloadService {
     return Buffer.concat(chunks).toString("utf8");
   }
   private async dashboard(request:import("node:http").IncomingMessage,response:ServerResponse,url:URL):Promise<void>{
-    const guildID=url.pathname.slice(11);
+    const guildID=url.pathname.slice(11),canManage=url.searchParams.get("manager")==="1";
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
-      return this.html(response,dashboardPage());
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,intro:await getServerIntro(this.root,guildID),integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
+      return this.html(response,dashboardPage(canManage));
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
     if(request.headers.origin && request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
@@ -82,6 +85,8 @@ export class DownloadService {
     const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
       const data=JSON.parse(body);
+      if(["settings","upload-intro"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
+      if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,guildID,data));
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
         if(data.downloadNaming!==undefined&&!["date","date-channel","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
@@ -176,7 +181,7 @@ export class DownloadService {
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
       const body=await this.readBody(request,800000);if(body===undefined)return this.json(response,413,{error:"Request too large."});
       try{
-        const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,saved.guildID,data));resolveAudioFormat(data.format,data.trackFormat);
+        const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,403,{error:"Server intros can only be uploaded through a manager dashboard link from /dashboard."});resolveAudioFormat(data.format,data.trackFormat);
         const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{targetLUFS:data.targetLUFS,maxTruePeakDBTP:data.maxTruePeakDBTP,normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
         const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
         return this.json(response,202,{url:jobURL.toString()});
@@ -207,7 +212,7 @@ export class DownloadService {
       let downloadURL=result&&url.searchParams.get("mixed")==="1"?result:undefined;
       if(result&&["audacity","audition"].includes(job.format)){const target=new URL(result);target.pathname+="/project.zip";downloadURL=target.toString();}
       const position=this.queue!.position(job.id);
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:position?`Waiting in the export queue: position ${position}`:job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:position?(job.stage?.startsWith("Waiting for disk space")?`${job.stage} Queue position ${position}.`:`Waiting in the export queue: position ${position}`):job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
       return this.html(response,exportProgressPage());
     }
     if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "POST") return this.error(response,405,"Method not allowed.");
@@ -317,12 +322,18 @@ export class DownloadService {
       if(!/^\/browser\/[a-f0-9-]{36}$/i.test(url.pathname)||!session||!this.authorized(url,url.pathname)||this.sockets.clients.size>=100){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
       if(request.headers.origin && request.headers.origin!==this.publicURL){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
       if((this.guestCounts.get(id)??0)>=MAX_BROWSER_GUESTS){socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");return;}
+      const token=url.searchParams.get("guest")??randomBytes(16).toString("hex"),username=(url.searchParams.get("name")??"Guest").replace(/[\x00-\x1f\x7f]/g,"").trim();
+      if(!/^[a-f0-9]{32}$/.test(token)||!username||username.length>80){socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");return;}
+      if(this.activeGuests.get(id)?.has(token)){socket.end("HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n");return;}
+      let userID:string;try{userID=session.claimBrowserGuest(token);}catch{socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");return;}
       this.sockets.handleUpgrade(request,socket,head,ws=>{
+        const guests=this.activeGuests.get(id)??new Set<string>();guests.add(token);this.activeGuests.set(id,guests);
+        ws.once("close",()=>{guests.delete(token);if(!guests.size)this.activeGuests.delete(id);});
         this.guestCounts.set(id,(this.guestCounts.get(id)??0)+1);
         startKeepAlive(ws);
         ws.on("close",()=>{const left=(this.guestCounts.get(id)??1)-1;if(left>0)this.guestCounts.set(id,left);else this.guestCounts.delete(id);});
-        const encoder=new OpusEncoder(48000,2),userID="browser-"+randomUUID(),username=(url.searchParams.get("name")??"Guest").slice(0,80);
-        let frames=0,epoch=Date.now();
+        const encoder=new OpusEncoder(48000,2);
+        let firstFrame=true,frames=0,epoch=Date.now();
         const timer=setInterval(()=>{if(!this.liveSession(id))ws.close(1000,"Recording stopped");},1000);timer.unref();
         ws.on("close",()=>clearInterval(timer));ws.on("error",()=>ws.close());
         ws.on("message",(raw,isBinary)=>{
@@ -331,7 +342,8 @@ export class DownloadService {
           if(Date.now()-epoch>=5000){frames=0;epoch=Date.now();}if(++frames>500){ws.close(1008,"Audio rate exceeded");return;}
           try{
             const stereo=Buffer.alloc(3840);for(let sample=0;sample<960;sample++){const value=bytes.readInt16LE(4+sample*2);stereo.writeInt16LE(value,sample*4);stereo.writeInt16LE(value,sample*4+2);}
-            void session.append(encoder.encode(stereo),userID,username,bytes.readUInt32LE(0),undefined,stereo).catch(()=>ws.close(1011,"Recording storage error"));
+            const packet=encoder.encode(stereo),pcmEpoch=firstFrame;firstFrame=false;
+            void session.append(packet,userID,username,bytes.readUInt32LE(0),undefined,stereo,pcmEpoch).catch(()=>ws.close(1011,"Recording storage error"));
           }catch{ws.close(1008,"Invalid audio frame");}
         });
       });

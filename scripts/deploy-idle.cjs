@@ -14,6 +14,8 @@ try{
  if(fs.existsSync(jobs))for(const name of fs.readdirSync(jobs)){
   if(!name.endsWith('.json'))continue;
   const job=JSON.parse(fs.readFileSync(path.join(jobs,name),'utf8'));
-  if(['queued','running','cancelling'].includes(job.state))process.exit(1);
+  // Space-blocked jobs are durable and cannot drain until capacity changes; restart preserves them.
+  const spaceBlocked=job.state==='queued'&&typeof job.stage==='string'&&job.stage.startsWith('Waiting for disk space');
+  if(['queued','running','cancelling'].includes(job.state)&&!spaceBlocked)process.exit(1);
  }
 }catch(error){console.error('Cannot confirm deployment is idle:',error.message);process.exit(1);}

@@ -171,7 +171,7 @@ The compiled application targets Node 24. Run `npm run check:host` for offline
 runtime checks. No TypeScript compilation is needed on the hosting service.
 
 With downloads enabled, `/webapp` opens a private browser microphone link for
-an active recording (up to 8 remote guests per recording; the connection is pinged every 25 seconds so reverse proxies keep it open, and guest audio is shed first if storage falls behind, so guest backpressure is less likely to fail the Discord recording) and `/dashboard` opens recording/settings management.
+an active recording (up to 8 simultaneous remote guests and 16 distinct browser guest tracks per recording; a tab reuses its guest track after reconnecting; the connection is pinged every 25 seconds so reverse proxies keep it open, and guest audio is shed first if storage falls behind, so guest backpressure is less likely to fail the Discord recording) and `/dashboard` opens recording/settings management for members with Manage Server permission. Manager dashboard links grant settings and server-intro changes; share them only with server managers. Older dashboard links cannot change these settings. `/autojoin` and `/autorecord` enable/disable also require Manage Server; status stays available.
 Browser audio preserves original PCM for lossless WAV/FLAC speaker exports.
 Download pages support audio previews and clipped exports. `/recover` salvages
 checksummed complete audio from interrupted sessions into a new session while
@@ -220,11 +220,11 @@ are relative to the exported audio. Excerpts include only notes in their selecte
 range and shift those notes to the excerpt timeline; original notes stay intact.
 Audition must still verify how it displays these markers.
 
-Storage checks run at startup and once a minute. Below `LOW_DISK_WARNING_GIB`
+Storage checks run at startup and every ten seconds, plus every second while exports run. Below `LOW_DISK_WARNING_GIB`
 (default 1 GiB), the console logs a warning when entering the low-space state.
 The dashboard and `/status` show available space and a low-space warning. No
-automatic deletion is enabled by default. Sessions default to an 8-hour maximum, configurable with `/recordinglimit` (2–24 hours). Filesystem
-free space does not necessarily reflect hosting-provider storage quotas. Below `CRITICAL_DISK_MIB` (default 256 MiB, capped at half the warning threshold; `0` disables it), recordings are finalized and new recordings and queued exports wait until space is freed. Nothing is deleted.
+automatic deletion of original recordings is enabled by default. Sessions default to an 8-hour maximum, configurable with `/recordinglimit` (2–24 hours). Filesystem
+free space does not necessarily reflect hosting-provider storage quotas. Below `CRITICAL_DISK_MIB` (default 256 MiB, capped at half the warning threshold; `0` disables it), running exports are interrupted and requeued first, with temporary output removed. Recordings are finalized only if a fresh disk check remains critical. New recordings and exports pause until space is freed; original audio is preserved.
 
 ## Compact Discord recording panel
 
@@ -285,6 +285,12 @@ never adopted by an event, and a manual stop stays stopped. Use `mode:status`
 to inspect rules or `mode:disable` to remove one. Rules survive restarts;
 starting events while the bot is offline is not replayed on reconnect.
 
+Clean voice disconnections (for example a moderator kick) save the recording and leave voice. Voice errors still trigger the reconnect policy. Autojoin also handles members switching into an eligible voice channel.
+
+Generated export folders expire after 48 hours unless they are still referenced by active jobs, saved editor state or edited exports; source exports required by those edits are preserved. Terminal job records expire after seven days. Cleanup runs at startup and hourly, also removing abandoned intro uploads after one hour and unreferenced intro versions after 48 hours. Startup removes interrupted export temporary folders and recordings already marked for deletion. Original recordings use their separate retention policy. Download completed exports promptly; expired exports can be generated again. Unknown export manifests are preserved for manual investigation.
+
+Exports estimate their peak disk use before starting, including project ZIP duplication, and reserve budgets across concurrent jobs above the recording warning threshold. Insufficient capacity shows **Waiting for disk space** and retries every 30 seconds. Estimates are approximate; the live disk guard remains necessary. A durable job waiting for disk space can survive an operator deployment; active recordings and other export work still block deployment.
+
 ## Export cancellation and retry
 
 `/export` returns a job ID. `/exportjob action:status job:<ID>` shows progress;
@@ -340,7 +346,7 @@ WAV, FLAC, MP3 and AAC excerpts trim directly during conversion from the correct
 
 Private download pages let you choose which speaker tracks appear in mixed audio. All speakers are included by default. Excluded speakers keep their separate tracks in multi-track/project downloads, and at least one speaker must remain selected.
 
-Download pages can save a reusable intro per Discord server (WAV, FLAC, MP3, or Ogg; up to 30 MB and five minutes). Enable it per export to add a separate intro track and shift all speaker audio and notes after it. Queued exports retain the intro version selected when queued. Intro and silence-trimming options default off.
+Manager dashboard links can save a reusable intro per Discord server (WAV, FLAC, MP3, or Ogg; up to 30 MB and five minutes). Enable it per export to add a separate intro track and shift all speaker audio and notes after it. Queued exports retain the intro version selected when queued. Recording download links can use the current intro but cannot replace it. Intro and silence-trimming options default off.
 
 “Trim shared silent pauses” (configurable on the download page from 0.1–3600 seconds, default 30) detects shared silence in the selected speakers (100 ms windows, -50 dBFS threshold), removes the whole qualifying pause, and applies identical cuts to every exported speaker track. Activity on an excluded speaker does not prevent a cut. Notes move with the edited timeline; intro audio is added afterward and is never silence-trimmed. Original recordings are preserved.
 

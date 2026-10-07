@@ -19,6 +19,7 @@ export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now()
   {name:"Session",value:`\`${session.id}\``}
  ];
  if(session.stopReason==="duration-limit")fields.push({name:`${session.durationHours}-hour session limit reached`,value:"Recording stopped automatically. Start a new recording to continue."});
+ if(session.stopReason==="disconnected")fields.push({name:"Disconnected from voice",value:"Recording stopped and saved. Use /record to start a new session."});
  if(session.stopReason==="low-disk")fields.push({name:"Disk space critically low",value:"Recording stopped automatically to protect saved audio. Free up space, then start a new recording."});
  if(session.stopReason==="empty-channel")fields.push({name:"Voice channel empty",value:"Event recording stopped after 60 seconds without human participants. Audio was saved."});
  if(lowSpace)fields.push({name:"⚠️ Low disk space",value:"Recording storage is running low. Ask the host operator to review available space."});

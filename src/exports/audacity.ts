@@ -2,7 +2,7 @@
 // Copyright/permission: licenses/Craig-ISC.txt. Open in Audacity, then save in its native format.
 import { mkdir,link,writeFile } from "node:fs/promises";
 import path from "node:path";
-const xml=(text:string)=>text.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));
+const xml=(text:string)=>text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g,"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));
 export async function writeAudacity(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>=[]):Promise<void>{
  await mkdir(path.join(directory,"session_data"));
  for(const track of tracks)await link(path.join(directory,track.file),path.join(directory,"session_data",track.file));

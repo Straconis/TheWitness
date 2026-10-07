@@ -13,7 +13,7 @@ export class StorageMonitor {
    if(this.latest.low&&!this.warned)this.alert(`[Storage] Low disk space: ${(availableBytes/1024**3).toFixed(2)} GiB available. Download or remove unwanted recordings before the disk fills. No recordings were deleted.`);
    this.warned=this.latest.low;
    if(critical&&!this.criticalFired){
-    this.alert(`[Storage] Critically low disk space: ${(availableBytes/1024**2).toFixed(0)} MiB available. Stopping active recordings to protect saved audio; new exports are paused. No recordings were deleted.`);
+    this.alert(`[Storage] Critically low disk space: ${(availableBytes/1024**2).toFixed(0)} MiB available. Pausing exports and checking recording safety; new exports are paused. No recordings were deleted.`);
     try{this.onCritical();}catch(error){console.error("[Storage] Critical-space handler failed.",error);}
    }
    this.criticalFired=critical;return {...this.latest};})();this.checking=task;

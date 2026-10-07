@@ -31,7 +31,7 @@ test('eight-hour timer finalizes idle/reconnecting sessions, skips end cue, clea
   const session=await manager.start({id:'guild',members:new Map()},'voice',connection,async()=>{attempts++;return connection;});
   receiver.emit('data',packet,'alice',0);
   let emitEnd;manager.syncSessions.set('guild',{stop:async emit=>{emitEnd=emit;}});
-  connection.emit('disconnect');
+  connection.emit('disconnect',new Error('Network lost'));
   t.mock.timers.tick(MAX_RECORDING_DURATION_MS);
   // Drain the reconnect lock and duration-limit finalization without advancing time again.
   await manager.exclusive('guild',async()=>{});

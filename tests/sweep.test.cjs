@@ -27,7 +27,7 @@ test('browser frames become speaker tracks; dashboard and export queue work toge
   const packet=Buffer.alloc(1924);for(let i=0;i<960;i++)packet.writeInt16LE(Math.round(Math.sin(i*2*Math.PI*440/48000)*5000),4+i*2);ws.send(packet);
   await wait(()=>session.packets===1);assert.ok([...session.tracks.values()][0].id.startsWith('browser-'));
   ws.close();await once(ws,'close');await manager.exclusive('guild',()=>manager.stop('guild'));
-  const dashboard=local(service.dashboardLink('guild'));
+  const dashboard=local(service.dashboardLink('guild',true));
   const state=await (await fetch(dashboard,{headers:{Accept:'application/json'}})).json();assert.equal(state.sessions.length,1);assert.ok(state.storage.availableBytes>=0);
   const named=await fetch(dashboard,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'title',session:session.id,title:'Session from dashboard'})});assert.equal(named.status,200);await named.text();assert.equal(JSON.parse(await readFile(path.join(session.directory,'session.json'))).title,'Session from dashboard');
   const saved=await fetch(dashboard,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'settings',autoJoin:false,autoRecord:true})});assert.equal(saved.status,200);await saved.text();assert.equal(settings.get('guild').autoJoin,true);

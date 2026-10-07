@@ -5,7 +5,7 @@ async function until(predicate){for(let i=0;i<200;i++){if(predicate())return;awa
 for(const shutdown of [false,true])test(`queued reconnect is cancelled before its lock starts (${shutdown?'shutdown':'stop'})`,async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-cancel-')),manager=new RecordingManager(root,[0]);
  try{const first=voice();let attempts=0;const session=await manager.start({id:'guild',members:new Map()},'voice',first.connection,async()=>{attempts++;return voice().connection;});let release;const blocker=manager.exclusive('guild',()=>new Promise(r=>release=r));await until(()=>release);
- first.connection.emit('disconnect');assert.equal(session.voiceState,'reconnecting');manager.cancelReconnect('guild');const stopped=shutdown?manager.shutdown():manager.exclusive('guild',()=>manager.stop('guild'));release();await blocker;await stopped;assert.equal(attempts,0);assert.equal(manager.sessions.size,0);assert.equal(session.state,'completed');
+ first.connection.emit('disconnect',new Error('Network lost'));assert.equal(session.voiceState,'reconnecting');manager.cancelReconnect('guild');const stopped=shutdown?manager.shutdown():manager.exclusive('guild',()=>manager.stop('guild'));release();await blocker;await stopped;assert.equal(attempts,0);assert.equal(manager.sessions.size,0);assert.equal(session.state,'completed');
  }finally{await manager.shutdown();await rm(root,{recursive:true,force:true});}
 });
 test('concurrent duplicate export submissions share one persistent job',async()=>{

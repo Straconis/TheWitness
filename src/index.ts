@@ -1,3 +1,4 @@
+import {cleanTransientArtifacts} from "./exports/storage";
 import {shutdownInOrder} from "./shutdown";
 import { RetentionRunner } from "./automation/retention";
 import { ExportQueue } from "./exports/jobs";
@@ -6,7 +7,7 @@ import { mkdir } from "node:fs/promises";
 
 import { markInterruptedSessions } from "./recording/recovery";
 import { config } from "./config";
-import { createDiscordClient, recordings, settingsStore, storageMonitor, closeAutomation, closePanels } from "./discord/client";
+import { createDiscordClient, recordings, settingsStore, storageMonitor, closeAutomation, closePanels,setStorageExportQueue } from "./discord/client";
 
 async function main(): Promise<void> {
   console.log(`The Witness v${require("../package.json").version}`);
@@ -18,14 +19,16 @@ async function main(): Promise<void> {
 
   await settingsStore.load();
 
+  await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
+  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check());
+  setStorageExportQueue(exportQueue);
+  // Cleanup may reclaim space needed to persist recovery metadata, before workers start.
+  await exportQueue.load(false);
   const interrupted = await markInterruptedSessions(config.recordingPath);
   if (interrupted) console.warn(`[Recovery] Preserved ${interrupted} interrupted session(s).`);
-
   console.log(`[Storage] Recordings: ${config.recordingPath}`);
-
   await storageMonitor.start().catch(error=>console.warn("[Storage] Disk-space check unavailable.",error));
-  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical);
-  await exportQueue.load();
+  exportQueue.start();
   const retention=new RetentionRunner(config.recordingPath,settingsStore,recordings,exportQueue);retention.start();
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;

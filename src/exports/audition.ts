@@ -2,7 +2,7 @@
 // Copyright and permission notice: licenses/Craig-ISC.txt.
 import { open,writeFile } from "node:fs/promises";
 import path from "node:path";
-const xml=(text:string)=>text.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));
+const xml=(text:string)=>text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g,"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));
 async function samples(filename:string):Promise<number>{
  const file=await open(filename,"r");
  try{
