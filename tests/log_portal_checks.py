@@ -24,6 +24,19 @@ class Checks(unittest.TestCase):
     response=request('/api/logs','operator:correct-password');self.assertEqual(response.status,503);self.assertNotIn(b'secret',response.read())
    self.assertNotIn('innerHTML',p.JS)
   finally:server.shutdown();server.server_close();thread.join()
+ def test_systemd_failure_records_and_forged_units(self):
+  records=[
+   {'_SYSTEMD_UNIT':'init.scope','_PID':'1','UNIT':p.UNIT,'MESSAGE':"Failed with result 'oom-kill'."},
+   {'_SYSTEMD_UNIT':'init.scope','_PID':'1','UNIT':p.UNIT,'MESSAGE':'Main process exited, code=killed, status=9/KILL'},
+   {'_SYSTEMD_UNIT':'systemd-coredump@123.service','COREDUMP_UNIT':p.UNIT,'MESSAGE':'Process dumped core.'},
+   {'_SYSTEMD_UNIT':'ssh.service','_PID':'45','UNIT':p.UNIT,'MESSAGE':'Forged failed message'},
+   {'_SYSTEMD_UNIT':'systemd-coredump-imposter.service','COREDUMP_UNIT':p.UNIT,'MESSAGE':'Forged core'},
+   {'_SYSTEMD_UNIT':'init.scope','_PID':'1','UNIT':'other.service','MESSAGE':'Other failure'},
+   {'_SYSTEMD_UNIT':'systemd-coredump@123.service','COREDUMP_UNIT':'other.service','MESSAGE':'Other core'}]
+  for item in records:item['__REALTIME_TIMESTAMP']='1000000'
+  def runner(*args,**kwargs):return subprocess.CompletedProcess([],0,'\n'.join(json.dumps(i) for i in records),'')
+  for view in ['all','failures']:
+   self.assertEqual([e['message'] for e in p.read_logs('1h','',runner=runner,view=view)],[r['MESSAGE'] for r in records[:3]])
  def test_failure_view_keeps_errors_and_stack_context(self):
   messages=[('Connected',6),('[Export] Error: encoder failed',6),('    at exportSession (export.js:1:2)',6),('Export completed',6),('Journal critical event',2),('Ordinary warning',4)]
   records=[{'_SYSTEMD_UNIT':p.UNIT,'MESSAGE':message,'PRIORITY':str(priority),'__REALTIME_TIMESTAMP':'1000000'} for message,priority in messages]
@@ -31,11 +44,29 @@ class Checks(unittest.TestCase):
   entries=p.read_logs('1h','',runner=runner,view='failures')
   self.assertEqual([e['message'] for e in entries],[messages[i][0] for i in [1,2,4]])
   with self.assertRaises(ValueError):p.read_logs('1h','',runner=runner,view='invalid')
+ def test_refresh_preserves_login_and_updates_private_values(self):
+  import tempfile, os
+  installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()
+  code=installer.split("<<'PY'\n",1)[1].split('\nPY',1)[0]
+  self.assertNotIn('exec_module',code)
+  with tempfile.TemporaryDirectory() as root:
+   config=pathlib.Path(root)/'portal.env';source=pathlib.Path(root)/'bot.env'
+   password_hash=p.hash_password('unchanged-password')
+   config.write_text('LOG_PORTAL_USERNAME=operator\nLOG_PORTAL_PASSWORD_HASH='+password_hash+'\nLOG_PORTAL_REDACT_VALUES="[]"\n')
+   source.write_text('DISCORD_TOKEN=new-test-token\nBOT_SECRET="path\\with\\slashes$"\nNOT_SECRET=fixture\n')
+   code=code.replace('/etc/the-witness-log-portal.env',str(config)).replace('/opt/the-witness/.env',str(source))
+   result=subprocess.run(['python3','-','--refresh-redactions'],input=code,capture_output=True,text=True,check=True)
+   body=config.read_text();self.assertIn('LOG_PORTAL_PASSWORD_HASH='+password_hash,body)
+   self.assertIn('LOG_PORTAL_USERNAME=operator',body);self.assertEqual(config.stat().st_mode&0o777,0o600)
+   values=json.loads(json.loads(body.split('LOG_PORTAL_REDACT_VALUES=',1)[1].strip()))
+   self.assertIn('new-test-token',values);self.assertIn('path\\with\\slashes$',values)
+   self.assertNotIn('new-test-token',result.stdout)
  def test_installer_username_prompt_on_a_real_terminal(self):
   import os, pty, fcntl, termios
   installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()
   start=installer.index("with open('/dev/tty','w')")
   fragment=installer[start:installer.index('if not username.isascii()',start)]
+  fragment='\n'.join(line[1:] if line.startswith(' ') else line for line in fragment.splitlines())
   master,slave=pty.openpty()
   def controlling_terminal():
    os.setsid();fcntl.ioctl(slave,termios.TIOCSCTTY,0)

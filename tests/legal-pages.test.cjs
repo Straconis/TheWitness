@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {mkdtemp,rm}=require('node:fs/promises');
+const {mkdtemp,rm,readFile}=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const {DownloadService}=require('../dist/downloads/service');
@@ -20,6 +20,13 @@ test('policy routes are public, support HEAD, reject mutations and preserve priv
   const inviteHTML=await invite.text();assert.match(inviteHTML,/Add to Discord/);assert.match(inviteHTML,/client_id=1542557380594761778/);assert.match(inviteHTML,/scope=bot%20applications.commands/);
   assert.equal((await fetch(base+'/invite',{method:'HEAD'})).status,200);
   assert.equal((await fetch(base+'/invite',{method:'POST'})).status,405);
+  assert.match(inviteHTML,/rel="icon" type="image\/png" href="\/assets\/witness-icon.png"/);
+  for(const [route,file,type] of [['/favicon.ico','favicon.ico','image/vnd.microsoft.icon'],['/assets/witness-icon.png','witness-icon.png','image/png'],['/apple-touch-icon.png','witness-icon.png','image/png']]){
+   const response=await fetch(base+route);assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),type);
+   assert.deepEqual(Buffer.from(await response.arrayBuffer()),await readFile(path.resolve(__dirname,'../docs/images',file)));
+   const head=await fetch(base+route,{method:'HEAD'});assert.equal(head.status,200);assert.equal(await head.text(),'');
+   assert.equal((await fetch(base+route,{method:'POST'})).status,405);
+  }
   const denied=await fetch(base+'/recording/11111111-1111-4111-8111-111111111111');assert.equal(denied.status,403);await denied.text();
   const unknown=await fetch(base+'/privacy-extra');assert.equal(unknown.status,404);await unknown.text();
  }finally{await service?.close();await rm(root,{recursive:true,force:true});}

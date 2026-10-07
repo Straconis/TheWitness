@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 
 UNIT = 'the-witness.service'
 WINDOWS = {'1h': '1 hour ago', '6h': '6 hours ago', '24h': '24 hours ago'}
-FAILURE = re.compile(r'\b(?:[A-Za-z]*Error|fatal|failed|failure|failures|uncaught|unhandled|cannot|timed out)\b|could not|can.t ', re.I)
+FAILURE = re.compile(r'\b(?:[A-Za-z]*Error|fatal|failed|failure|failures|uncaught|unhandled|cannot|timed out|killed|oom|dumped core|main process exited)\b|could not|can.t ', re.I)
 CONTINUATION = re.compile(r'^\s+(?:at |\.\.\.|[a-zA-Z_][\w]*:)|^\s*[}\]]')
 
 def hash_password(password, salt=None):
@@ -30,6 +30,13 @@ def redact(message, values=()):
     message = re.sub(r'(?i)((?:authorization|access_token|refresh_token|discordToken|password|client_secret)\s*[\"\']?\s*[:=]\s*)(?:Bearer\s+)?[\"\']?[^\s,}\"\']+', r'\1[redacted]', message)
     return message
 
+def belongs_to_witness(item):
+    # Underscore fields are supplied by journald, not the message sender.
+    if item.get('_SYSTEMD_UNIT') == UNIT: return True
+    if item.get('_PID') == '1' and item.get('UNIT') == UNIT: return True
+    source=item.get('_SYSTEMD_UNIT','')
+    return item.get('COREDUMP_UNIT') == UNIT and isinstance(source,str) and (source == 'systemd-coredump.service' or source.startswith('systemd-coredump@') and source.endswith('.service'))
+
 def read_logs(window, query, values=(), runner=subprocess.run, view="all"):
     if window not in WINDOWS or len(query) > 200 or view not in ('all','failures'): raise ValueError('Invalid filter')
     result = runner(['journalctl', '--unit', UNIT, '--since', WINDOWS[window], '--lines', '1000', '--no-pager', '--output=json'], capture_output=True, text=True, timeout=10, check=True)
@@ -38,7 +45,7 @@ def read_logs(window, query, values=(), runner=subprocess.run, view="all"):
         try:
             item=json.loads(line)
             # Defense in depth: never return a different service's records.
-            if item.get('_SYSTEMD_UNIT') != UNIT: continue
+            if not belongs_to_witness(item): continue
             message=item.get('MESSAGE', '')
             if not isinstance(message, str): message='[non-text journal message]'
             try: priority=int(item.get('PRIORITY',6))

@@ -76,3 +76,16 @@ sudo journalctl -u the-witness-log-portal.service --since '1 hour ago' --no-page
 ```
 
 In the operator portal, select **Show → Failures only** to focus on journal error priorities and recognizable error messages, including adjacent stack traces. The text filter, time window, live refresh and download apply to this view. It searches the latest 1,000 service records, so use the full journal over SSH for older records or errors that were not labeled clearly.
+
+
+Systemd's own crash, OOM and core-dump messages for Witness appear alongside the bot's messages. The portal verifies their journal-supplied source fields before accepting them. **Failures only** includes those failures; ordinary start/restart lifecycle messages remain available under **All records**.
+
+After rotating or adding bot secrets, refresh the exact-value redaction snapshot without changing the portal login:
+
+```sh
+sudo bash /opt/the-witness/scripts/enable-log-portal.sh --refresh-redactions
+```
+
+This reads the bot configuration, preserves the existing username/hash, atomically replaces the root-only portal environment file and restarts the portal. Do not print the environment file or inspect service environment values when diagnosing startup; use service state and its journal instead.
+
+The nginx rate limit currently counts Cloudflare edge addresses. Per-visitor limiting requires a root-owned nginx configuration change that trusts only Cloudflare's published source ranges before accepting its client-IP header. Authentication remains required for proxied and direct origin requests.

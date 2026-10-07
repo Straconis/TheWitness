@@ -42,14 +42,17 @@ export async function closeRecordingPanels():Promise<void>{try{await closeAutoma
 const exportJobs = new Set<string>();
 const queuePositionText=(position:number)=>`Waiting in the export queue: position ${position}. It starts automatically when earlier exports finish.`;
 /** Discord-attachment exports wait their turn in the shared queue; Discord allows message edits for 15 minutes. */
-async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number)=>Promise<unknown>):Promise<ExportJob|undefined>{
+async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number|undefined)=>Promise<unknown>):Promise<ExportJob|undefined>{
   let shown:number|undefined;const deadline=Date.now()+14*60*1000;
   for(;;){
     if(queue.stopping||Date.now()>=deadline)return undefined;
     const job=queue.get(id);if(!job)throw new Error("Export job disappeared.");
     if(["completed","failed","cancelled"].includes(job.state))return job;
     const position=queue.position(id);
-    if(position&&position!==shown){shown=position;await onPosition(position).catch(error=>console.warn("[Export] Could not update queue position:",error));}
+    if(position!==shown && (position!==undefined || job.state==="running")){
+      shown=position;
+      await onPosition(position).catch(error=>console.warn("[Export] Could not update queue position:",error));
+    }
     await delay(2000,undefined,{ref:false});
   }
 }
@@ -476,7 +479,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if (exportQueue) {
           const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat });
           await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`}).catch((error:unknown) => console.warn("[Export] Could not update reply:", error));
-          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${queuePositionText(position)}` }));
+          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${position===undefined?"Your export is now processing.":queuePositionText(position)}` }));
           if(!job){
             console.warn(`[Export] Attachment delivery stopped for job ${queued.id}; its queued export is preserved.`);
             const reason = exportQueue.stopping
@@ -484,6 +487,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
               : "Discord only lets this reply update for 15 minutes, so the export can't be attached here. The job continues and its files stay on the host.";
             await interaction.editOriginalMessage({ content: `${reason}\nCheck it with /exportjob action:status job:${queued.id}` }).catch((error:unknown) => console.warn("[Export] Could not update delivery status:", error));
             return;
+          }
+          if(job.state === "cancelled"){
+            await interaction.editOriginalMessage({content:`Export job ${job.id} was cancelled.`}).catch((error:unknown)=>console.warn("[Export] Could not update cancellation status:",error));return;
           }
           if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
           directory = path.join(config.recordingPath, job.sessionID, job.directory);
