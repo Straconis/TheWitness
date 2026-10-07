@@ -7,6 +7,8 @@ from urllib.parse import urlsplit, parse_qs
 
 UNIT = 'the-witness.service'
 WINDOWS = {'1h': '1 hour ago', '6h': '6 hours ago', '24h': '24 hours ago'}
+FAILURE = re.compile(r'\b(?:[A-Za-z]*Error|fatal|failed|failure|failures|uncaught|unhandled|cannot|timed out)\b|could not|can.t ', re.I)
+CONTINUATION = re.compile(r'^\s+(?:at |\.\.\.|[a-zA-Z_][\w]*:)|^\s*[}\]]')
 
 def hash_password(password, salt=None):
     salt = salt or secrets.token_bytes(16)
@@ -28,10 +30,10 @@ def redact(message, values=()):
     message = re.sub(r'(?i)((?:authorization|access_token|refresh_token|discordToken|password|client_secret)\s*[\"\']?\s*[:=]\s*)(?:Bearer\s+)?[\"\']?[^\s,}\"\']+', r'\1[redacted]', message)
     return message
 
-def read_logs(window, query, values=(), runner=subprocess.run):
-    if window not in WINDOWS or len(query) > 200: raise ValueError('Invalid filter')
+def read_logs(window, query, values=(), runner=subprocess.run, view="all"):
+    if window not in WINDOWS or len(query) > 200 or view not in ('all','failures'): raise ValueError('Invalid filter')
     result = runner(['journalctl', '--unit', UNIT, '--since', WINDOWS[window], '--lines', '1000', '--no-pager', '--output=json'], capture_output=True, text=True, timeout=10, check=True)
-    entries=[]
+    entries=[]; previous_failure=False
     for line in result.stdout.splitlines():
         try:
             item=json.loads(line)
@@ -39,6 +41,11 @@ def read_logs(window, query, values=(), runner=subprocess.run):
             if item.get('_SYSTEMD_UNIT') != UNIT: continue
             message=item.get('MESSAGE', '')
             if not isinstance(message, str): message='[non-text journal message]'
+            try: priority=int(item.get('PRIORITY',6))
+            except (ValueError,TypeError): priority=6
+            failure=priority<=3 or bool(FAILURE.search(message)) or (previous_failure and bool(CONTINUATION.search(message)))
+            previous_failure=failure
+            if view=='failures' and not failure: continue
             message=redact(message, values)[:16384]
             if query.casefold() not in message.casefold(): continue
             stamp=datetime.fromtimestamp(int(item['__REALTIME_TIMESTAMP'])/1000000, timezone.utc).isoformat()
@@ -46,8 +53,8 @@ def read_logs(window, query, values=(), runner=subprocess.run):
         except (ValueError, KeyError, TypeError, OverflowError): continue
     return entries
 
-PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>The Witness · Operator logs</title><style>body{font:16px system-ui;background:#10151d;color:#edf1f7;margin:0;padding:24px}main{max-width:1300px;margin:auto}h1{margin-bottom:6px}p{color:#aab8c9}label,button{margin-right:12px}input,select,button{font:inherit;padding:8px;background:#202a39;color:inherit;border:1px solid #526278;border-radius:6px}input{max-width:90%;width:300px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#080c12;padding:16px;border-radius:8px;max-height:70vh;overflow:auto;font:13px ui-monospace,monospace}a{color:#8ebcff}</style><main><h1>The Witness · Operator logs</h1><p>Read-only diagnostics · times in your browser's local timezone · latest 1,000 records · credentials and private links are redacted where recognized.</p><label>Window <select id="window"><option value="1h">Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select></label><label>Filter <input id="filter" maxlength="200" placeholder="Session, job ID, or message"></label><button id="refresh">Refresh</button><label><input id="live" type="checkbox" checked style="width:auto"> Live</label><a id="download" href="/api/download">Download shown logs</a><p id="status" role="status"></p><pre id="logs">Loading…</pre></main><script src="/viewer.js"></script></html>'''
-JS='''const q=s=>document.querySelector(s);let busy=false;async function refresh(){if(busy)return;busy=true;const params=new URLSearchParams({window:q('#window').value,q:q('#filter').value});q('#download').href='/api/download?'+params;try{const response=await fetch('/api/logs?'+params,{cache:'no-store'});if(!response.ok)throw Error(response.status===401?'Login required. Reload this page.':'Could not read service logs. Check the portal service over SSH.');const entries=await response.json();q('#logs').textContent=entries.map(e=>new Date(e.time).toLocaleString()+'  '+e.message).join('\\n')||'No matching records in this window.';q('#status').textContent='Updated '+new Date().toLocaleTimeString()+' · '+entries.length+' records';}catch(error){q('#status').textContent=error.message;}finally{busy=false;}}q('#refresh').onclick=refresh;q('#window').onchange=refresh;q('#filter').onchange=refresh;setInterval(()=>{if(q('#live').checked&&!document.hidden)refresh();},5000);refresh();'''
+PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>The Witness · Operator logs</title><style>body{font:16px system-ui;background:#10151d;color:#edf1f7;margin:0;padding:24px}main{max-width:1300px;margin:auto}h1{margin-bottom:6px}p{color:#aab8c9}label,button{margin-right:12px}input,select,button{font:inherit;padding:8px;background:#202a39;color:inherit;border:1px solid #526278;border-radius:6px}input{max-width:90%;width:300px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#080c12;padding:16px;border-radius:8px;max-height:70vh;overflow:auto;font:13px ui-monospace,monospace}a{color:#8ebcff}</style><main><h1>The Witness · Operator logs</h1><p>Read-only diagnostics · times in your browser's local timezone · latest 1,000 service records · failures detected from severity and error messages · credentials and private links are redacted where recognized.</p><label>Window <select id="window"><option value="1h">Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select></label><label>Show <select id="view"><option value="all">All records</option><option value="failures">Failures only</option></select></label><label>Filter <input id="filter" maxlength="200" placeholder="Session, job ID, or message"></label><button id="refresh">Refresh</button><label><input id="live" type="checkbox" checked style="width:auto"> Live</label><a id="download" href="/api/download">Download shown logs</a><p id="status" role="status"></p><pre id="logs">Loading…</pre></main><script src="/viewer.js"></script></html>'''
+JS='''const q=s=>document.querySelector(s);let busy=false;async function refresh(){if(busy)return;busy=true;const params=new URLSearchParams({window:q('#window').value,q:q('#filter').value,view:q('#view').value});q('#download').href='/api/download?'+params;try{const response=await fetch('/api/logs?'+params,{cache:'no-store'});if(!response.ok)throw Error(response.status===401?'Login required. Reload this page.':'Could not read service logs. Check the portal service over SSH.');const entries=await response.json();q('#logs').textContent=entries.map(e=>new Date(e.time).toLocaleString()+'  '+e.message).join('\\n')||'No matching records in this window.';q('#status').textContent='Updated '+new Date().toLocaleTimeString()+' · '+entries.length+' records';}catch(error){q('#status').textContent=error.message;}finally{busy=false;}}q('#refresh').onclick=refresh;q('#window').onchange=refresh;q('#view').onchange=refresh;q('#filter').onchange=refresh;setInterval(()=>{if(q('#live').checked&&!document.hidden)refresh();},5000);refresh();'''
 
 class Portal(ThreadingHTTPServer):
     daemon_threads=True
@@ -93,9 +100,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path=='/': return self.send(200,PAGE,'text/html; charset=utf-8')
         if url.path=='/viewer.js': return self.send(200,JS,'text/javascript; charset=utf-8')
         if url.path not in ['/api/logs','/api/download']: return self.send(404,'Not found.')
-        args=parse_qs(url.query);window=args.get('window',['1h'])[0];query=args.get('q',[''])[0]
-        if set(args)-{'window','q'}: return self.send(400,'Invalid filter.')
-        try: entries=read_logs(window,query,self.server.redactions)
+        args=parse_qs(url.query);window=args.get('window',['1h'])[0];query=args.get('q',[''])[0];view=args.get('view',['all'])[0]
+        if set(args)-{'window','q','view'}: return self.send(400,'Invalid filter.')
+        try: entries=read_logs(window,query,self.server.redactions,view=view)
         except ValueError: return self.send(400,'Invalid filter.')
         except (subprocess.SubprocessError,OSError):
             print('[Log portal] Cannot read the fixed service journal.',flush=True)

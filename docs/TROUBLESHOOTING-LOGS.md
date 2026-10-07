@@ -74,3 +74,5 @@ Check the portal itself over SSH:
 systemctl status the-witness-log-portal.service --no-pager
 sudo journalctl -u the-witness-log-portal.service --since '1 hour ago' --no-pager
 ```
+
+In the operator portal, select **Show → Failures only** to focus on journal error priorities and recognizable error messages, including adjacent stack traces. The text filter, time window, live refresh and download apply to this view. It searches the latest 1,000 service records, so use the full journal over SSH for older records or errors that were not labeled clearly.

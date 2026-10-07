@@ -15,7 +15,8 @@ class Checks(unittest.TestCase):
     self.assertEqual(request(route).status,401);self.assertEqual(request(route,'operator:wrong-password').status,401)
    response=request('/','operator:correct-password');self.assertEqual(response.status,200);self.assertEqual(response.headers['Cache-Control'],'no-store');self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
    with patch.object(p,'read_logs',return_value=[{'time':'2026-10-07T00:00:00Z','message':'<script>bad</script>'}]) as reader:
-    response=request('/api/logs?window=6h&q=session','operator:correct-password');self.assertEqual(response.status,200);reader.assert_called_with('6h','session',())
+    response=request('/api/logs?window=6h&q=session','operator:correct-password');self.assertEqual(response.status,200);reader.assert_called_with('6h','session',(),view='all')
+    response=request('/api/logs?view=failures','operator:correct-password');self.assertEqual(response.status,200);reader.assert_called_with('1h','',(),view='failures')
     self.assertEqual(request('/api/logs?unit=ssh.service','operator:correct-password').status,400)
     self.assertEqual(request('/api/logs','operator:correct-password','POST').status,405)
     self.assertEqual(request('/api/download','operator:correct-password').status,200)
@@ -23,6 +24,13 @@ class Checks(unittest.TestCase):
     response=request('/api/logs','operator:correct-password');self.assertEqual(response.status,503);self.assertNotIn(b'secret',response.read())
    self.assertNotIn('innerHTML',p.JS)
   finally:server.shutdown();server.server_close();thread.join()
+ def test_failure_view_keeps_errors_and_stack_context(self):
+  messages=[('Connected',6),('[Export] Error: encoder failed',6),('    at exportSession (export.js:1:2)',6),('Export completed',6),('Journal critical event',2),('Ordinary warning',4)]
+  records=[{'_SYSTEMD_UNIT':p.UNIT,'MESSAGE':message,'PRIORITY':str(priority),'__REALTIME_TIMESTAMP':'1000000'} for message,priority in messages]
+  def runner(*args,**kwargs):return subprocess.CompletedProcess([],0,'\n'.join(json.dumps(i) for i in records),'')
+  entries=p.read_logs('1h','',runner=runner,view='failures')
+  self.assertEqual([e['message'] for e in entries],[messages[i][0] for i in [1,2,4]])
+  with self.assertRaises(ValueError):p.read_logs('1h','',runner=runner,view='invalid')
  def test_installer_username_prompt_on_a_real_terminal(self):
   import os, pty, fcntl, termios
   installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()

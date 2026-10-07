@@ -4,6 +4,8 @@
 
 The Witness is a multitrack Discord recording bot based on [Craig](https://craig.chat/), designed for TTRPG sessions and private groups across multiple Discord servers. A hosted version is provided by the project owner on a RackNerd VPS, with automatic deployment from GitHub and private web downloads at [thewitness.dev](https://thewitness.dev). Exports support separate speaker tracks, mixdowns, reusable intros, configurable silence trimming, audio normalization, and local transcription.
 
+**[Add The Witness to your Discord server](https://thewitness.dev/invite)**
+
 ## Hosted or self-hosted — your choice
 
 A hosted version of The Witness is provided by the project owner for people who want to use the bot without running a server themselves. Self-hosting is optional: the source code is available so you can run your own instance, inspect how it works, or customize it if you want to. You do not need to deploy the source code to use the hosted version.
