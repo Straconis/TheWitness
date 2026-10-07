@@ -8,8 +8,10 @@ Run this from an authenticated GitHub CLI when ready:
 gh workflow run deploy.yml --repo Straconis/TheWitness --ref main
 ```
 
-Alternatively choose **Run workflow** in GitHub Actions. The workflow installs
-Node 24, builds the application, runs the test suite, and packages a release.
+Alternatively choose **Run workflow** in GitHub Actions. The deployment job runs
+only when the selected ref is `main`; runs dispatched for other refs are skipped.
+For an accepted run, it installs Node 24, builds the application, runs the test
+suite, and packages a release.
 A failed build or test does not change the VPS.
 
 GitHub repository secrets:

@@ -21,4 +21,6 @@ The one-time migration preserves operator SSH keys and reuses the existing GitHu
 
 This separation limits repository push access to unprivileged application/deployment code. It does not protect recordings or logs from malicious application code, and does not restrict the human administrator's sudo privileges. Cloudflare ranges remain a snapshot: refresh during periodic maintenance or after announced changes.
 
+The current VPS was verified on 2026-10-07 with `dev.tty.legacy_tiocsti=0`, disabling legacy terminal keystroke injection. Verify this setting before using the tools on another host: `sysctl dev.tty.legacy_tiocsti` should report `0`, or the key should be absent on a kernel without that interface. A host that enables it needs terminal isolation for the unprivileged `runuser` steps or administrator configuration to disable the feature first.
+
 Download administration uses a read-only, no-follow regular-file open of the existing deployment lock and retains that lock throughout setup. It refuses busy, missing, symlink or special-file locks before changing settings. Root-tool updates remain manual even when application releases are deployed.
