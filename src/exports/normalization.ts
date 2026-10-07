@@ -1,8 +1,21 @@
-import {spawn} from "node:child_process";
+import {promisify} from "node:util";
+import {spawn,execFile} from "node:child_process";
 import {once} from "node:events";
 import {rename,rm} from "node:fs/promises";
 import path from "node:path";
 import {runTool,deprioritize} from "./process";
+const inspectTool=promisify(execFile);
+const loudnessRanges=new Map<string,Promise<number>>();
+/** Older host/CI builds cap LRA at 20; newer builds allow 50. Use the widest supported range. */
+function loudnessRange(ffmpeg:string):Promise<number>{
+ let pending=loudnessRanges.get(ffmpeg);
+ if(!pending){pending=inspectTool(ffmpeg,["-hide_banner","-h","filter=loudnorm"],{timeout:10000,maxBuffer:32768,killSignal:"SIGKILL"}).then(({stdout,stderr})=>{
+  const maximum=Number(/\bLRA\s+[^\n]*\(from 1 to (\d+)\)/.exec(stdout+stderr)?.[1]);
+  if(!Number.isFinite(maximum)||maximum<1)throw Error("FFmpeg lacks compatible loudnorm support. Rebuild the bundled audio tool.");
+  return Math.min(50,maximum);
+ });loudnessRanges.set(ffmpeg,pending);void pending.catch(()=>loudnessRanges.delete(ffmpeg));}
+ return pending;
+}
 export const TARGET_LUFS=-16;
 export const TRUE_PEAK_DBTP=-1;
 export const MAX_BOOST_DB=20;
@@ -18,8 +31,9 @@ export interface LoudnessMatch {before:AudioLevel;after:AudioLevel;targetLUFS:nu
 /** BS.1770 / EBU R128 gated integrated loudness and oversampled true peak. */
 export async function measureLevel(file:string,ffmpeg:string,signal?:AbortSignal,raw=false,settings:LoudnessSettings={}):Promise<AudioLevel>{
  const {targetLUFS,maxTruePeakDBTP}=resolveLoudness(settings);
+ signal?.throwIfAborted();const range=await loudnessRange(ffmpeg);
  const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);
- const child=deprioritize(spawn(ffmpeg,["-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=50:print_format=json`,"-f","null","-"],{stdio:["ignore","ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
+ const child=deprioritize(spawn(ffmpeg,["-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=${range}:print_format=json`,"-f","null","-"],{stdio:["ignore","ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
  let stderr="";child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
  try{
   const [code]=await once(child,"close");if(code!==0)throw Error("Cannot measure audio loudness: "+stderr);
@@ -53,7 +67,8 @@ export async function matchLoudness(file:string,codec:string,ffmpeg:string,signa
  // loudnorm's accepted target range is -70 .. -5 LUFS. Never boost nearly silent tracks past the safety cap.
  const target=Math.min(targetLUFS,before.lufs+MAX_BOOST_DB);
  if(target < -70)return {before,after:before,targetLUFS:target,boostLimited:true};
- const filter=`loudnorm=I=${target}:TP=${maxTruePeakDBTP}:LRA=50:measured_I=${before.lufs}:measured_TP=${before.truePeak}:measured_LRA=${before.lra}:measured_thresh=${before.threshold}:offset=${Number.isFinite(before.offset)?before.offset:0}:linear=true`;
+ const range=await loudnessRange(ffmpeg);
+ const filter=`loudnorm=I=${target}:TP=${maxTruePeakDBTP}:LRA=${range}:measured_I=${before.lufs}:measured_TP=${before.truePeak}:measured_LRA=${before.lra}:measured_thresh=${before.threshold}:offset=${Number.isFinite(before.offset)?before.offset:0}:linear=true`;
  await filterFile(file,filter,codec,ffmpeg,signal);
  return {before,after:await measureLevel(file,ffmpeg,signal,false,settings),targetLUFS:target,boostLimited:target<targetLUFS};
 }
