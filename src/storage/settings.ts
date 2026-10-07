@@ -1,9 +1,11 @@
+import { validateRecordingDuration } from "../recording/duration";
 import { validateSync,SyncSettings } from "../recording/sync";
 import { validateSchedule,RecordingSchedule } from "../automation/schedules";
 import { validateAccess } from "../discord/access";
 import { readFile, writeFile, rename } from "node:fs/promises";
-export interface GuildSettings { sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
+export interface GuildSettings { recordingDurationHours?:number; sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
 function validateEvents(settings:GuildSettings):void{
+ if(settings.recordingDurationHours!==undefined)validateRecordingDuration(settings.recordingDurationHours);
  if(settings.sync!==undefined)validateSync(settings.sync);
  if(settings.retentionDays!==undefined&&(!Number.isInteger(settings.retentionDays)||settings.retentionDays<0||settings.retentionDays>3650))throw Error("Retention must be 0 (off) or 1–3650 days.");
  if(settings.autoJoinChannels!==undefined&&(!Array.isArray(settings.autoJoinChannels)||settings.autoJoinChannels.length>100||settings.autoJoinChannels.some(id=>!/^\d{1,25}$/.test(id))))throw Error("Invalid autojoin channel list.");

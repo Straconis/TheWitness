@@ -1,3 +1,4 @@
+import { DEFAULT_RECORDING_DURATION_HOURS, DURATION_WARNING_MINUTES, validateRecordingDuration } from "./duration";
 // Craig split-file layout and Opus headers adapted from commit 60d1a00.
 // See licenses/Craig-ISC.txt for copyright and permission notice.
 import { validateTitle } from "../storage/titles";
@@ -10,6 +11,8 @@ import { BOS, encodeOggPage } from "./ogg";
 
 export const MAX_RECORDING_DURATION_MS = 8 * 60 * 60 * 1000;
 export const MAX_RECORDING_SAMPLES = BigInt(MAX_RECORDING_DURATION_MS) * 48n;
+/** Shed browser audio first to reserve queue capacity for Discord audio. */
+export const GUEST_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
 
 const OPUS_HEAD = Buffer.from([0x4f,0x70,0x75,0x73,0x48,0x65,0x61,0x64,1,2,0,15,0x80,0xbb,0,0,0,0,0]);
 const OPUS_TAGS = Buffer.from([0x4f,0x70,0x75,0x73,0x54,0x61,0x67,0x73,9,0,0,0,0x6e,0x6f,0x64,0x65,0x2d,0x6f,0x70,0x75,0x73,0,0,0,0,0xff]);
@@ -17,8 +20,13 @@ interface Track { id: string; username: string; track: number; packet: number; p
 
 export class RecordingSession {
   title?:string;
-  stopReason?: "duration-limit" | "empty-channel";
+  stopReason?: "duration-limit" | "empty-channel" | "low-disk";
   onDurationLimit?: () => Promise<void>;
+  onDurationWarning?: (minutes:number) => Promise<void>;
+  private warningTimers:NodeJS.Timeout[] = [];
+  get maxDurationMs():number{return this.durationHours*60*60*1000;}
+  get maxSamples():bigint{return BigInt(this.maxDurationMs)*48n;}
+  cancelDurationTimers():void{clearTimeout(this.durationTimer);for(const timer of this.warningTimers)clearTimeout(timer);this.warningTimers=[];}
   private durationTimer?: NodeJS.Timeout;
   readonly id = randomUUID();
   endedAt?: string;
@@ -28,6 +36,7 @@ export class RecordingSession {
   voiceState: "connected" | "reconnecting" = "connected";
   state: "recording" | "completed" | "failed" = "recording";
   packetStats = { duplicatesDropped: 0, latePacketsDropped: 0 };
+  guestFramesDropped = 0;
   audioOrigin?:number;
   packets = 0;
   notes = 0;
@@ -40,12 +49,12 @@ export class RecordingSession {
   private accepting = true;
   private failure?: Error;
 
-  private constructor(root: string, readonly guildID: string, readonly channelID: string, readonly channelName?: string) {
+  private constructor(root: string, readonly guildID: string, readonly channelID: string, readonly channelName?: string, readonly durationHours = DEFAULT_RECORDING_DURATION_HOURS) {
     this.directory = path.join(root, this.id);
   }
 
-  static async create(root: string, guildID: string, channelID: string, channelName?: string): Promise<RecordingSession> {
-    const session = new RecordingSession(root, guildID, channelID, channelName);
+  static async create(root: string, guildID: string, channelID: string, channelName?: string, durationHours = DEFAULT_RECORDING_DURATION_HOURS): Promise<RecordingSession> {
+    const session = new RecordingSession(root, guildID, channelID, channelName, validateRecordingDuration(durationHours));
     await mkdir(session.directory, { recursive: true });
     try {
       for (const name of ["header1", "header2", "data", "users", "notes"]) {
@@ -62,8 +71,14 @@ export class RecordingSession {
       session.durationTimer = setTimeout(() => {
         session.stopReason = "duration-limit";
         void (session.onDurationLimit?.() ?? session.close()).catch(error => console.error("[Recording] Duration-limit finalization failed:", error));
-      }, Math.max(0, MAX_RECORDING_DURATION_MS - Number(session.elapsedSamples()) / 48));
+      }, Math.max(0, session.maxDurationMs - Number(session.elapsedSamples()) / 48));
       session.durationTimer.unref();
+      for(const minutes of DURATION_WARNING_MINUTES){
+        const wait=session.maxDurationMs-minutes*60*1000-Number(session.elapsedSamples())/48;
+        if(wait<=0)continue;
+        const timer=setTimeout(()=>{if(session.accepting && !session.stopReason)void session.onDurationWarning?.(minutes).catch(error=>console.warn("[Recording] Duration warning failed:",error));},wait);
+        timer.unref();session.warningTimers.push(timer);
+      }
       return session;
     } catch (error) {
       await Promise.allSettled([...session.files.values()].map(file => file.close()));
@@ -85,8 +100,8 @@ export class RecordingSession {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
       id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID, channelName: this.channelName,
-      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats,
-      error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
+      startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats, guestFramesDropped: this.guestFramesDropped || undefined,
+      durationHours:this.durationHours, diagnosticStopReason:this.stopReason==="duration-limit"?"max_duration":this.stopReason, error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));
     await rename(target + ".tmp", target);
   }
@@ -104,8 +119,9 @@ export class RecordingSession {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
     // Guard every input path even if the deadline timer is delayed or a stop is queued.
     const capturedTime = arrival ?? this.elapsedSamples();
-    if (capturedTime >= MAX_RECORDING_SAMPLES) return Promise.resolve();
+    if (capturedTime >= this.maxSamples) return Promise.resolve();
     if (!userID || !data.length) return Promise.resolve();
+    if (originalPCM && this.pendingBytes > GUEST_BACKPRESSURE_BYTES) { this.guestFramesDropped++; return Promise.resolve(); }
     if (this.pendingBytes + data.length + (originalPCM?.length??0) > 16 * 1024 * 1024) {
       this.failure = new Error("Recording storage cannot keep up with incoming audio.");
       return Promise.reject(this.failure);
@@ -143,7 +159,7 @@ export class RecordingSession {
 
   note(text: string, authorID: string, atSamples?:bigint): Promise<void> {
     if (!this.accepting || this.failure) return Promise.reject(this.failure ?? new Error("Session is closed."));
-    if (this.elapsedSamples() >= MAX_RECORDING_SAMPLES || (atSamples !== undefined && atSamples >= MAX_RECORDING_SAMPLES)) return Promise.reject(new Error("The 8-hour recording limit has been reached."));
+    if (this.elapsedSamples() >= this.maxSamples || (atSamples !== undefined && atSamples >= this.maxSamples)) return Promise.reject(new Error(`The ${this.durationHours}-hour recording limit has been reached.`));
     if (!text.trim() || text.length > 2000) return Promise.reject(new Error("Notes must contain between 1 and 2000 characters."));
     const time = atSamples ?? this.elapsedSamples();
     const task = this.queue.then(async () => {
@@ -160,7 +176,7 @@ export class RecordingSession {
   close(error?: Error): Promise<void> {
     if (this.closing) return this.closing;
     this.accepting = false;
-    clearTimeout(this.durationTimer);
+    this.cancelDurationTimers();
     this.closing = (async () => {
       await this.queue;
       if (error) this.failure ??= error;

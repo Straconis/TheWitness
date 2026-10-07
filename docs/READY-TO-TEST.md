@@ -102,7 +102,7 @@ are preserved. Multiple holders of a private link share the saved edit; the last
 save wins. Use WAV/FLAC sources when editing to avoid another lossy encoding pass.
 Playback preview uses browser media timing; final edits render through FFmpeg.
 The editor supports up to 100 tracks, 500 clips and a 24-hour timeline; the
-recording engine stops and saves each session at its hard 8-hour maximum. Adjust note times after moving
+recording engine stops and saves each session at its configured maximum (8 hours by default; `/recordinglimit hours` accepts 2, 4, 6, 8, 12, 16, or 24). Discord warns at 1 hour, 30, 15, 5, and 1 minute remaining; stopping cancels those warnings. Adjust note times after moving
 conversation clips. Browser editing is for post-session use, not a new in-game
 window requirement.
 

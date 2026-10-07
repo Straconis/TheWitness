@@ -1,3 +1,4 @@
+import { deprioritize } from "./process";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
 import {rename} from "node:fs/promises";
@@ -8,7 +9,7 @@ export function silenceSeconds(value:unknown=30):number {if(typeof value!=="numb
 /** Detect activity per speaker, rather than summing waveforms that could cancel. 100 ms windows, -50 dBFS. */
 export async function findSilenceCuts(files:string[],selected:Set<string>,ffmpeg:string,signal?:AbortSignal,minimumSeconds=30,trimEndSilence=false,trimSharedSilence=true):Promise<{cuts:SilenceCut[];duration:number;trailingCut?:SilenceCut}>{
  minimumSeconds=silenceSeconds(minimumSeconds);const activity:number[]=[];let duration=0;
- for(const file of files){signal?.throwIfAborted();const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);const child=spawn(ffmpeg,["-nostdin","-v","error","-i",file,"-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le","pipe:1"],{stdio:["ignore","pipe","pipe"],signal:combined,killSignal:"SIGKILL"});let stderr="",samples=0,pending=Buffer.alloc(0);child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-2000));const closed=once(child,"close");closed.catch(()=>{});
+ for(const file of files){signal?.throwIfAborted();const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);const child=spawn(ffmpeg,["-nostdin","-v","error","-i",file,"-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le","pipe:1"],{stdio:["ignore","pipe","pipe"],signal:combined,killSignal:"SIGKILL"});deprioritize(child);let stderr="",samples=0,pending=Buffer.alloc(0);child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-2000));const closed=once(child,"close");closed.catch(()=>{});
  try{for await(const chunk of child.stdout){const bytes=pending.length?Buffer.concat([pending,chunk]):chunk;const length=bytes.length-(bytes.length%2);for(let offset=0;offset<length;offset+=2){if(selected.has(file)&&Math.abs(bytes.readInt16LE(offset))>104)activity[Math.floor(samples/9600)]=1;samples++;}pending=bytes.subarray(length);}const [code]=await closed;if(code!==0)throw Error("Cannot analyze silence: "+stderr);duration=Math.max(duration,samples/96000);}catch(error){child.kill("SIGKILL");throw error;}
  }
  const cuts:SilenceCut[]=[];let start:number|undefined;for(let window=0;window<Math.ceil(duration*10);window++){if(!activity[window])start??=window/10;else if(start!==undefined){const end=window/10;if(trimSharedSilence&&end-start>minimumSeconds)cuts.push({start,end});start=undefined;}}let trailingCut:SilenceCut|undefined;

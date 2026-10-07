@@ -1,16 +1,59 @@
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {rename} from "node:fs/promises";
+import {rename,rm} from "node:fs/promises";
 import path from "node:path";
-import {runTool} from "./process";
-export interface AudioLevel {rms:number;peak:number}
-/** Measure RMS only in 100 ms windows containing audible audio, so pauses do not inflate gain. */
-export async function measureLevel(file:string,ffmpeg:string,signal?:AbortSignal,raw=false):Promise<AudioLevel>{
- const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]),child=spawn(ffmpeg,["-nostdin","-v","error",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le","pipe:1"],{stdio:["ignore","pipe","pipe"],signal:combined,killSignal:"SIGKILL"});let stderr="",pending=Buffer.alloc(0),peak=0,count=0,energy=0,windowPeak=0,windowCount=0,windowEnergy=0;child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-2000));const closed=once(child,"close");closed.catch(()=>{});const flush=()=>{if(windowPeak>104){count+=windowCount;energy+=windowEnergy;}windowCount=0;windowEnergy=0;windowPeak=0;};
- try{for await(const chunk of child.stdout){const bytes=pending.length?Buffer.concat([pending,chunk]):chunk,length=bytes.length-bytes.length%2;for(let offset=0;offset<length;offset+=2){const value=bytes.readInt16LE(offset);peak=Math.max(peak,Math.abs(value));windowPeak=Math.max(windowPeak,Math.abs(value));windowEnergy+=value*value;windowCount++;if(windowCount===9600)flush();}pending=bytes.subarray(length);}flush();const [code]=await closed;if(code!==0)throw Error("Cannot measure audio level: "+stderr);return {rms:count?Math.sqrt(energy/count)/32768:0,peak:peak/32768};}catch(error){child.kill("SIGKILL");throw error;}
+import {runTool,deprioritize} from "./process";
+export const TARGET_LUFS=-16;
+export const TRUE_PEAK_DBTP=-1;
+export const MAX_BOOST_DB=20;
+export interface LoudnessSettings {targetLUFS?:number;maxTruePeakDBTP?:number}
+export function resolveLoudness(settings:LoudnessSettings={}):Required<LoudnessSettings>{
+ const targetLUFS=settings.targetLUFS??TARGET_LUFS,maxTruePeakDBTP=settings.maxTruePeakDBTP??TRUE_PEAK_DBTP;
+ if(typeof targetLUFS!=="number"||!Number.isFinite(targetLUFS)||targetLUFS < -70||targetLUFS > -5)throw Error("Target loudness must be between -70 and -5 LUFS.");
+ if(typeof maxTruePeakDBTP!=="number"||!Number.isFinite(maxTruePeakDBTP)||maxTruePeakDBTP < -9||maxTruePeakDBTP > 0)throw Error("Maximum true peak must be between -9 and 0 dBTP.");
+ return {targetLUFS,maxTruePeakDBTP};
 }
-/** Constant gain preserves dynamics; cap boosts at 20 dB and peaks at -1 dBFS. */
-export function normalizationGain(level:AudioLevel,target=0.1):number{return !level.rms||!level.peak?1:Math.min(target/level.rms,10,10**(-1/20)/level.peak);}
+export interface AudioLevel {lufs:number;truePeak:number;lra:number;threshold:number;offset?:number}
+export interface LoudnessMatch {before:AudioLevel;after:AudioLevel;targetLUFS:number;boostLimited:boolean}
+/** BS.1770 / EBU R128 gated integrated loudness and oversampled true peak. */
+export async function measureLevel(file:string,ffmpeg:string,signal?:AbortSignal,raw=false,settings:LoudnessSettings={}):Promise<AudioLevel>{
+ const {targetLUFS,maxTruePeakDBTP}=resolveLoudness(settings);
+ const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);
+ const child=deprioritize(spawn(ffmpeg,["-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=50:print_format=json`,"-f","null","-"],{stdio:["ignore","ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
+ let stderr="";child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
+ try{
+  const [code]=await once(child,"close");if(code!==0)throw Error("Cannot measure audio loudness: "+stderr);
+  const json=/\{\s*"input_i"[\s\S]*?\}/.exec(stderr);if(!json)throw Error("Audio tool did not return loudness measurements. Rebuild the bundled FFmpeg with loudnorm enabled.");
+  const data=JSON.parse(json[0]),numeric=(value:string):number=>value==="-inf"?-Infinity:value==="inf"?Infinity:Number(value),level={lufs:numeric(data.input_i),truePeak:numeric(data.input_tp),lra:numeric(data.input_lra),threshold:numeric(data.input_thresh),offset:numeric(data.target_offset)};
+  if(Number.isNaN(level.lufs)||Number.isNaN(level.truePeak)||!Number.isFinite(level.lra)||(Number.isFinite(level.lufs)&&!Number.isFinite(level.threshold)))throw Error("Invalid loudness measurements.");
+  return level;
+ }catch(error){child.kill("SIGKILL");if(signal?.aborted)throw signal.reason;throw error;}
+}
+/** Constant gain for intro matching, capped by true peak and a 20 dB boost. */
+export function normalizationGain(level:AudioLevel,target=TARGET_LUFS,truePeak=TRUE_PEAK_DBTP):number{
+ if(!Number.isFinite(level.lufs)||!Number.isFinite(level.truePeak))return 1;
+ return 10**(Math.min(target-level.lufs,MAX_BOOST_DB,truePeak-level.truePeak)/20);
+}
+function encoding(codec:string):string[]{return ["-ar","48000","-c:a",codec,...(codec==="pcm_s16le"?["-rf64","auto"]:[]),...(codec==="aac"?["-f","mp4"]:[])];}
+async function filterFile(file:string,filter:string,codec:string,ffmpeg:string,signal?:AbortSignal):Promise<void>{
+ const output=path.join(path.dirname(file),"normalized-"+path.basename(file));
+ try{await runTool(ffmpeg,["-nostdin","-v","error","-n","-i",file,"-af",filter,...encoding(codec),output],signal);await rename(output,file);}
+ finally{await rm(output,{force:true});}
+}
 export async function applyGain(file:string,gain:number,codec:string,ffmpeg:string,signal?:AbortSignal):Promise<void>{
- if(Math.abs(gain-1)<0.0001)return;const output=path.join(path.dirname(file),"normalized-"+path.basename(file));await runTool(ffmpeg,["-nostdin","-v","error","-n","-i",file,"-af",`volume=${gain}`,"-c:a",codec,...(codec==="pcm_s16le"?["-rf64","auto"]:[]),...(codec==="aac"?["-f","mp4"]:[]),output],signal);await rename(output,file);
+ if(!Number.isFinite(gain)||gain<=0)throw Error("Invalid normalization gain.");
+ if(Math.abs(gain-1)<0.0001)return;
+ await filterFile(file,`volume=${gain}`,codec,ffmpeg,signal);
+}
+/** Two-pass loudness matching. Preserve dynamics when possible; limit peaks when needed. */
+export async function matchLoudness(file:string,codec:string,ffmpeg:string,signal?:AbortSignal,measured?:AudioLevel,settings:LoudnessSettings={}):Promise<LoudnessMatch>{
+ const {targetLUFS,maxTruePeakDBTP}=resolveLoudness(settings);
+ const before=measured??await measureLevel(file,ffmpeg,signal,false,settings);
+ if(!Number.isFinite(before.lufs)||!Number.isFinite(before.truePeak))return {before,after:before,targetLUFS,boostLimited:false};
+ // loudnorm's accepted target range is -70 .. -5 LUFS. Never boost nearly silent tracks past the safety cap.
+ const target=Math.min(targetLUFS,before.lufs+MAX_BOOST_DB);
+ if(target < -70)return {before,after:before,targetLUFS:target,boostLimited:true};
+ const filter=`loudnorm=I=${target}:TP=${maxTruePeakDBTP}:LRA=50:measured_I=${before.lufs}:measured_TP=${before.truePeak}:measured_LRA=${before.lra}:measured_thresh=${before.threshold}:offset=${Number.isFinite(before.offset)?before.offset:0}:linear=true`;
+ await filterFile(file,filter,codec,ffmpeg,signal);
+ return {before,after:await measureLevel(file,ffmpeg,signal,false,settings),targetLUFS:target,boostLimited:target<targetLUFS};
 }

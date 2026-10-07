@@ -55,6 +55,11 @@ const {downloadName}=require('./dist/downloads/names');
 if(downloadName('project.zip',{startedAt:'2026-10-01T12:00:00Z'},'date')!=='2026-10-01.zip')throw Error('ZIP naming smoke check failed');
 JS
 cd "$app"
+# The source-only deploy shares the existing host audio tool; refuse an incompatible upgrade.
+if ! "$app/bin/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qw loudnorm; then
+  echo "Host FFmpeg lacks loudnorm. Rebuild/install the bundled audio tool before deploying this version." >&2
+  exit 1
+fi
 # Verify permission before touching the running release.
 sudo -n -l /usr/bin/systemctl restart "$service" >/dev/null
 # Block new recordings/exports before waiting for current work to drain.
@@ -101,4 +106,20 @@ for helper in deploy-github.sh deploy-idle.cjs enable-github-deploy.sh enable-do
 done
 trap - ERR
 printf '%s\n' "$revision" > .releases/current-revision
+# Each release carries a full node_modules and shares a disk with the recordings. Keep the live
+# release, the rollback target, baseline payloads, and the three newest others; remove the rest.
+prune_releases() {
+  local keep=3 count=0 dir name protected skip
+  local -a keepers=("$(dirname "$(readlink -f dist)")" "$(dirname "$(readlink -f node_modules)")" "$(dirname "$old_dist")" "$(dirname "$old_modules")")
+  while IFS= read -r dir; do
+    name=$(basename "$dir")
+    [[ "$name" == baseline.* ]] && continue
+    skip=false
+    for protected in "${keepers[@]}"; do [[ "$dir" == "$protected" ]] && skip=true; done
+    [[ "$skip" == true ]] && continue
+    count=$((count + 1))
+    if (( count > keep )); then rm -rf -- "$dir"; echo "Pruned old release $name"; fi
+  done < <(find "$app/.releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+}
+prune_releases || echo 'Release pruning skipped.' >&2
 printf 'Deployed %s\n' "$revision"

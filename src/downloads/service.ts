@@ -30,6 +30,10 @@ import { constants, createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { sessionIDPattern } from "../storage/sessions";
+import { startKeepAlive } from "./keepalive";
+
+/** One recording rarely needs more than a few remote guests; a leaked link must not flood storage. */
+export const MAX_BROWSER_GUESTS = 8;
 
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
 const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup)|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/;
@@ -38,6 +42,7 @@ const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": 
 export class DownloadService {
   private server?: Server;
   private sockets = new WebSocketServer({ noServer:true, maxPayload:1924 });
+  private guestCounts = new Map<string,number>();
   private space?:StorageMonitor;
   private queue?:ExportQueue;
   private settings?:SettingsStore;
@@ -58,6 +63,12 @@ export class DownloadService {
     response.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});response.end(html);
   }
   private json(response:ServerResponse,status:number,value:unknown):void {response.writeHead(status,{"Content-Type":"application/json"});response.end(JSON.stringify(value));}
+  /** Collect bytes, not decoded chunks, so multi-byte characters split across chunks survive. */
+  private async readBody(request:import("node:http").IncomingMessage,limit:number):Promise<string|undefined>{
+    const chunks:Buffer[]=[];let size=0;
+    for await(const chunk of request){const buffer=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);size+=buffer.length;if(size>limit)return undefined;chunks.push(buffer);}
+    return Buffer.concat(chunks).toString("utf8");
+  }
   private async dashboard(request:import("node:http").IncomingMessage,response:ServerResponse,url:URL):Promise<void>{
     const guildID=url.pathname.slice(11);
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
@@ -68,9 +79,9 @@ export class DownloadService {
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
     if(request.headers.origin && request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
     if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-    let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1048576)return this.json(response,413,{error:"Request too large."});}
-    const data=JSON.parse(body);
+    const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
+      const data=JSON.parse(body);
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
         if(data.downloadNaming!==undefined&&!["date","date-channel","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
@@ -157,10 +168,10 @@ export class DownloadService {
       if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>800000)return this.json(response,413,{error:"Request too large."});}
+      const body=await this.readBody(request,800000);if(body===undefined)return this.json(response,413,{error:"Request too large."});
       try{
         const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,saved.guildID,data));resolveAudioFormat(data.format,data.trackFormat);
-        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
+        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{targetLUFS:data.targetLUFS,maxTruePeakDBTP:data.maxTruePeakDBTP,normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
         const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
         return this.json(response,202,{url:jobURL.toString()});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
@@ -178,7 +189,7 @@ export class DownloadService {
       if(request.method==="POST"){
         if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
         if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-        let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1024)return this.json(response,413,{error:"Request too large."});}
+        const body=await this.readBody(request,1024);if(body===undefined)return this.json(response,413,{error:"Request too large."});
         try{const data=JSON.parse(body);if(data.action==="cancel"){await this.queue!.cancel(job.id,job.guildID);return this.json(response,200,{state:this.queue!.get(job.id)!.state});}if(data.action==="retry"){const next=await this.queue!.retry(job.id,job.guildID);const retryURL=new URL(this.jobLink(next.id));if(url.searchParams.get("mixed")==="1")retryURL.searchParams.set("mixed","1");return this.json(response,202,{url:retryURL.toString()});}return this.json(response,400,{error:"Unknown action."});}
         catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Job action failed."});}
       }
@@ -226,7 +237,7 @@ export class DownloadService {
       if(filename||!this.queue)return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      let body="";for await(const chunk of request){body+=chunk;if(Buffer.byteLength(body)>1048576)return this.json(response,413,{error:"Request too large."});}
+      const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
       try{
         const data=JSON.parse(body);
         if(data.action==="save-edit"||data.action==="editor-export"){
@@ -292,7 +303,11 @@ export class DownloadService {
       const session=this.liveSession(id);
       if(!/^\/browser\/[a-f0-9-]{36}$/i.test(url.pathname)||!session||!this.authorized(url,url.pathname)||this.sockets.clients.size>=100){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
       if(request.headers.origin && request.headers.origin!==this.publicURL){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
+      if((this.guestCounts.get(id)??0)>=MAX_BROWSER_GUESTS){socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");return;}
       this.sockets.handleUpgrade(request,socket,head,ws=>{
+        this.guestCounts.set(id,(this.guestCounts.get(id)??0)+1);
+        startKeepAlive(ws);
+        ws.on("close",()=>{const left=(this.guestCounts.get(id)??1)-1;if(left>0)this.guestCounts.set(id,left);else this.guestCounts.delete(id);});
         const encoder=new OpusEncoder(48000,2),userID="browser-"+randomUUID(),username=(url.searchParams.get("name")??"Guest").slice(0,80);
         let frames=0,epoch=Date.now();
         const timer=setInterval(()=>{if(!this.liveSession(id))ws.close(1000,"Recording stopped");},1000);timer.unref();

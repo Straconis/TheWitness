@@ -2,7 +2,7 @@ const test=require('node:test');const assert=require('node:assert/strict');
 const {mkdtemp,rm}=require('node:fs/promises');const path=require('node:path');const os=require('node:os');
 const {helpMessage,helpTopics}=require('../dist/discord/help');
 test('help pages fit Discord limits and navigation preserves private, mention-free presentation',()=>{
- const expected=['record','stop','status','note','recordings','export','access','autojoin','autorecord','eventrecord','schedule','channelrules','retention','exportjob','title','downloadnames','delete','webapp','dashboard','recover','help'];
+ const expected=['recordinglimit','record','stop','status','note','recordings','export','access','autojoin','autorecord','eventrecord','schedule','channelrules','retention','exportjob','title','downloadnames','delete','webapp','dashboard','recover','help'];
  const text=helpTopics.map(topic=>{
   const body=helpMessage(topic.value,{downloads:true,restricted:false});assert.equal(body.flags,64);assert.deepEqual(body.allowedMentions,{parse:[]});
   const embed=body.embeds[0];assert.ok(embed.title.length<=256);assert.ok(embed.description.length<=4096);assert.ok(embed.description.length+embed.title.length+embed.footer.text.length+embed.fields[0].value.length<6000);
@@ -37,9 +37,14 @@ test('export help explains project track choice, exclusions, reusable intros, an
 
  test('help documents the recording cap and configured hosted transcription',()=>{
  const recording=helpMessage('recording',{downloads:true,restricted:false}).embeds[0].description;
- for(const text of ['8-hour maximum','stops automatically','saved for export','Start a new recording','skips the sync end cue'])assert.ok(recording.includes(text),text);
+ for(const text of ['8 hours by default','/recordinglimit hours:12','24 hours','Warnings','ZIP downloads'])assert.ok(recording.includes(text),text);
  const exports=helpMessage('exports',{downloads:true,restricted:false}).embeds[0].description;
  for(const text of ['Whisper on the server','TXT, SRT, and VTT','without user setup','Self-hosting'])assert.ok(exports.includes(text),text);
 });
 
 test('automation help explains empty-channel event cleanup independently of event-end stopping',()=>{const description=helpMessage('automation',{downloads:true,restricted:false}).embeds[0].description;for(const text of ['60 continuous seconds','bots do not count','rejoining cancels','Manual recordings are unaffected','event end is optional'])assert.ok(description.includes(text),text);});
+test('recordinglimit requires Manage Server, saves valid choices, and exposes current default',async()=>{
+ const {createDiscordClient,settingsStore,closeRecordingPanels}=require('../dist/discord/client');const {config}=require('../dist/config');await require('node:fs/promises').mkdir(config.recordingPath,{recursive:true});const client=createDiscordClient();client.guilds.set('987',{id:'987',name:'Duration test',channels:new Map()});
+ async function dispatch(hours,admin){let done,timer;const result=new Promise(resolve=>done=resolve);const interaction={type:2,data:{name:'recordinglimit',options:hours===undefined?[]:[{name:'hours',value:hours}]},guildID:'987',member:{roles:[],permissions:{has:()=>admin}},defer:async()=>{},createMessage:async body=>done(body),editOriginalMessage:async body=>done(body)};client.emit('interactionCreate',interaction);try{return await Promise.race([result,new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Command timed out')),2000))]);}finally{clearTimeout(timer);}}
+ try{assert.ok((await dispatch(undefined,false)).content.includes('Manage Server'));assert.ok((await dispatch(undefined,true)).content.includes('8 hours'));assert.ok((await dispatch(12,true)).content.includes('12 hours'));assert.equal(settingsStore.get('987').recordingDurationHours,12);await dispatch(25,true);assert.equal(settingsStore.get('987').recordingDurationHours,12);}finally{await closeRecordingPanels();await rm(config.recordingPath,{recursive:true,force:true});}
+});

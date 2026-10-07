@@ -5,6 +5,7 @@ export interface WitnessConfig {
   discordToken: string;
   recordingPath: string;
   lowDiskWarningBytes:number;
+  lowDiskCriticalBytes:number;
   downloadPort?: number;
   downloadHost?: string;
   downloadPublicURL?: string;
@@ -27,8 +28,13 @@ if (downloadPort && !process.env.DOWNLOAD_PUBLIC_URL?.trim()) throw new Error("D
 const warningGiB=Number(process.env.LOW_DISK_WARNING_GIB?.trim()||"1");
 if(!Number.isFinite(warningGiB)||warningGiB<=0)throw new Error("LOW_DISK_WARNING_GIB must be a positive number.");
 
+const criticalMiB=Number(process.env.CRITICAL_DISK_MIB?.trim()||"256");
+if(!Number.isFinite(criticalMiB)||criticalMiB<0)throw new Error("CRITICAL_DISK_MIB must be 0 (off) or a positive number.");
+
 export const config: WitnessConfig = {
   lowDiskWarningBytes:warningGiB*1024**3,
+  // Never exceed half the warning level, so a small LOW_DISK_WARNING_GIB cannot make recording stop at once.
+  lowDiskCriticalBytes:Math.min(criticalMiB*1024**2,warningGiB*1024**3/2),
   discordToken: requireEnv("DISCORD_TOKEN"),
   downloadPort: downloadPort ? Number(downloadPort) : undefined,
   downloadHost: process.env.DOWNLOAD_BIND_HOST?.trim() || "0.0.0.0",

@@ -17,7 +17,7 @@ The comparison below refers to **Craig's public hosted service**. Craig also pub
 | Area | Craig's public service | The Witness |
 | --- | --- | --- |
 | Hosting and maintenance | A hosted bot you invite to your server. | Use the version hosted by the project owner, or run your own instance. The hosted deployment uses a RackNerd VPS with automatic deployment from GitHub. |
-| Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | Hard 8-hour maximum per recording session; disk space and host resources also limit recording. Optional retention is controlled by the operator. |
+| Recording limits | Advertises recordings up to 6 hours, retained for 7 days. | Default 8-hour maximum per recording session, configurable from 2–24 hours; disk space and host resources also limit recording. Optional retention is controlled by the operator. |
 | Transcription | Available to Tier 3 Supporters. | Server-side Whisper transcription is already configured on the live deployment and produces TXT, SRT, and VTT when requested for an export, without a subscription or user setup. Self-hosted instances need a Whisper executable/model and processing capacity. |
 | Export formats | Advertises FLAC, AAC, Audacity projects, and Adobe Audition sessions; its FAQ says MP3 export is unavailable. | FLAC, WAV, AAC/M4A, Ogg Opus, MP3, Audacity import projects, and Adobe Audition sessions. Project ZIPs offer WAV or FLAC for individual tracks. |
 | Customization | Public service features and settings are maintained by Craig's operators. | Use the hosted version without managing deployment, or use the available source to control your own instance. Implemented features have no Witness premium tiers; hosting still has a cost. |
@@ -47,7 +47,7 @@ Generated recordings and production downloads have verified codecs, both speaker
 - Per-user multitrack Discord voice recording
 - Self-hosted on a VPS with automatic deployment from GitHub
 - All implemented features available without premium tiers
-- 8-hour maximum recording sessions
+- Default 8-hour maximum recording sessions; configurable 2, 4, 6, 8, 12, 16, or 24 hours
 - No plugin marketplace architecture
 - Local recording storage
 - Reliable session recovery
@@ -167,7 +167,7 @@ The compiled application targets Node 24. Run `npm run check:host` for offline
 runtime checks. No TypeScript compilation is needed on the hosting service.
 
 With downloads enabled, `/webapp` opens a private browser microphone link for
-an active recording and `/dashboard` opens recording/settings management.
+an active recording (up to 8 remote guests per recording; the connection is pinged every 25 seconds so reverse proxies keep it open, and guest audio is shed first if storage falls behind, so guest backpressure is less likely to fail the Discord recording) and `/dashboard` opens recording/settings management.
 Browser audio preserves original PCM for lossless WAV/FLAC speaker exports.
 Download pages support audio previews and clipped exports. `/recover` salvages
 checksummed complete audio from interrupted sessions into a new session while
@@ -219,8 +219,8 @@ Audition must still verify how it displays these markers.
 Storage checks run at startup and once a minute. Below `LOW_DISK_WARNING_GIB`
 (default 1 GiB), the console logs a warning when entering the low-space state.
 The dashboard and `/status` show available space and a low-space warning. No
-automatic deletion is enabled by default. Sessions have a hard 8-hour cap. Filesystem
-free space does not necessarily reflect hosting-provider storage quotas.
+automatic deletion is enabled by default. Sessions default to an 8-hour maximum, configurable with `/recordinglimit` (2–24 hours). Filesystem
+free space does not necessarily reflect hosting-provider storage quotas. Below `CRITICAL_DISK_MIB` (default 256 MiB, capped at half the warning threshold; `0` disables it), recordings are finalized and new recordings and queued exports wait until space is freed. Nothing is deleted.
 
 ## Compact Discord recording panel
 
@@ -290,7 +290,7 @@ a new job and preserves original recordings. Cancellation interrupts audio
 tools, transcription, ZIP creation and upload requests. Files already uploaded
 to a cloud account are not removed. Shutdown interrupts active jobs and queues
 them for restart; cancelled jobs stay cancelled. Optional tools have a bounded
-execution timeout, and each cloud request has a two-minute timeout.
+execution timeout and run at lowered CPU priority, and each cloud request has a two-minute timeout. If storage fails while the queue is working (for example a full disk) it pauses for 30 seconds and retries instead of staying stopped. On a hosted, multi-server bot set `CLOUD_UPLOAD_GUILD_IDS` to the server IDs allowed to upload to the owner's connected cloud accounts; when empty, every server may.
 
 ## Completed development handoff
 
@@ -332,7 +332,7 @@ Download pages can save a reusable intro per Discord server (WAV, FLAC, MP3, or 
 
 “Trim shared silent pauses” (configurable on the download page from 0.1–3600 seconds, default 30) detects shared silence in the selected speakers (100 ms windows, -50 dBFS threshold), removes the whole qualifying pause, and applies identical cuts to every exported speaker track. Activity on an excluded speaker does not prevent a cut. Notes move with the edited timeline; intro audio is added afterward and is never silence-trimmed. Original recordings are preserved.
 
-Optional speaker normalization uses constant gain toward -20 dBFS active-audio RMS (100 ms windows above -50 dBFS), with a 20 dB maximum boost and a -1 dBFS peak ceiling. It preserves dynamics rather than compressing them. “Match intro volume to selected speakers” uses the selected speakers’ audible RMS after any speaker normalization, applies gain to the intro, and observes the same safety limits. Silence does not lower the measured target. Both settings default off and original media is preserved.
+Optional speaker normalization matches each speaker and the final mix using two-pass EBU R128 / ITU-R BS.1770 integrated loudness matching, like Audition's LUFS Match Loudness mode, with configurable target loudness (default -16 LUFS, range -70 to -5) and maximum true peak (default -1 dBTP, range -9 to 0), and a 20 dB boost cap. Gating reduces the influence of quiet pauses. Linear gain preserves dynamics when possible; FFmpeg uses dynamic normalization / peak limiting when linear gain would exceed the ceiling. Silent tracks stay unchanged and very quiet tracks can remain below target. Export manifests record measured before/after loudness and capped targets; lossy encoding may introduce small loudness or true peak deviations. Intro matching uses the selected speakers' loudness after normalization and constant gain capped by true peak. Both settings default off and original media is preserved. Rebuild the bundled audio tool with `scripts/build-portable-audio.sh` when upgrading; GitHub source deployment shares the host's existing `bin/ffmpeg` and does not replace it automatically.
 
 When mixed audio includes an intro, speaker mixing finishes first, then the intro is added without changing the speaker mix gain. Intro matching uses the measured speaker mix level for mixed exports, so adding an intro does not reduce its volume according to participant count.
 
@@ -354,15 +354,26 @@ Validation: automated lifecycle, marker/export, feed authorization, tone, and cl
 
 ## Recording session duration
 
-Every recording session has a hard **8-hour maximum**, measured from session
-creation, including silence and reconnect time. This applies to manual, automatic,
-event, scheduled, and browser microphone recording. At the cap, capture stops,
-buffered audio from before the deadline is drained, the recording is finalized
-as completed, and the bot leaves voice. The saved recording card explains that
-the limit was reached; audio remains available for normal exports. Storage errors
-still produce a failed session requiring recovery. The cap skips the delayed sync
-end cue; even a normal Stop near the deadline cannot extend audio capture beyond
-eight hours. Start a new recording to continue; no new session starts automatically.
+Recordings have an **8-hour DEFAULT maximum**. Manage Server admins can set
+`/recordinglimit hours:12`, choosing **2, 4, 6, 8, 12, 16, or 24 hours**.
+Omit `hours` to view the server setting. Invalid values are rejected; the absolute
+safety ceiling is 24 hours. Changes apply to new recordings, including manual,
+automatic, event, scheduled, and browser recording. Active sessions keep their
+original deadline, measured from creation including silence and reconnect time.
+
+Discord warnings at 1 hour, 30 minutes, 15 minutes, 5 minutes, and 1 minute
+remaining say capture is still active and show the automatic stop time. Timers
+are cancelled when stopping. At the maximum, the normal `/stop` path drains
+buffered pre-deadline audio, finalizes participant tracks, saves the recording,
+and leaves voice. The saved card reports the configured limit; metadata retains
+`stopReason: "duration-limit"` and adds `diagnosticStopReason: "max_duration"`.
+Storage errors still produce failed sessions requiring recovery. The deadline
+skips delayed sync end cues and prevents capture extending past the limit.
+
+As after `/stop`, use the completed card's Download button or `/export` to select
+processing (mixdown, trims, transcription, intro) and package a ZIP through the
+normal export pipeline. These are selected at export time, not automatically
+run when recording stops. Start another recording to continue.
 
 ## Trim silence at the end
 

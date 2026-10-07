@@ -1,3 +1,4 @@
+import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
 import { helpMessage,helpTopics } from "./help";
 import { ScheduleRunner,newSchedule } from "../automation/schedules";
 import Eris from "eris";
@@ -20,11 +21,11 @@ import { archiveExport } from "../exports/archive";
 import { config } from "../config";
 import { RecordingManager } from "../recording/manager";
 
-export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes);
+export const storageMonitor=new StorageMonitor(config.recordingPath,config.lowDiskWarningBytes,undefined,undefined,config.lowDiskCriticalBytes,()=>{void recordings.stopForLowDisk().catch(error=>console.error("[Storage] Recording stop failed.",error));});
 
 
 export const settingsStore = new SettingsStore(path.join(config.recordingPath, "settings.json"));
-export const recordings = new RecordingManager(config.recordingPath,undefined,settingsStore);
+export const recordings = new RecordingManager(config.recordingPath,undefined,settingsStore,async()=>(await storageMonitor.check()).critical);
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
 let recordingPanels:RecordingPanels|undefined;
@@ -37,6 +38,7 @@ const exportJobs = new Set<string>();
 async function registerCommands(client: Eris.Client): Promise<void> {
   for (const guild of client.guilds.values()) {
     await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"recordinglimit",description:"Set the recording maximum (Manage Server required).",options:[{type:4,name:"hours",description:"Maximum hours; omit to show current setting",choices:RECORDING_DURATION_HOURS.map(value=>({name:`${value} hours`,value}))}]},
       {type:1,name:"schedule",description:"Opt into recurring recording (Manage Server required).",options:[{type:3,name:"action",description:"Schedule action",required:true,choices:[{name:"Add",value:"add"},{name:"Remove",value:"remove"},{name:"List",value:"list"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]},{type:3,name:"time",description:"Start HH:MM in the selected time zone"},{type:3,name:"days",description:"Weekdays as numbers: 0=Sun, 1=Mon, … 6=Sat (comma-separated)"},{type:3,name:"timezone",description:"IANA time zone, e.g. America/New_York (default UTC)"},{type:4,name:"minutes",description:"Recording duration in minutes",min_value:1,max_value:1440},{type:3,name:"title",description:"Recording title",max_length:120},{type:3,name:"id",description:"Schedule ID to remove"}]},
       {type:1,name:"retention",description:"Opt into deleting old completed recordings (Manage Server required).",options:[{type:4,name:"days",description:"Keep completed recordings this many days; 0 disables cleanup",required:true,min_value:0,max_value:3650},{type:5,name:"confirm",description:"Confirm automatic permanent deletion"}]},
       {type:1,name:"channelrules",description:"Limit automatic joining to selected channels (Manage Server required).",options:[{type:3,name:"mode",description:"Channel policy",required:true,choices:[{name:"Any channel",value:"all"},{name:"Add channel",value:"add"},{name:"Remove channel",value:"remove"},{name:"Show channels",value:"status"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]}]},
@@ -167,6 +169,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
   const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
 
+  recordings.onDurationWarning=async(session,minutes)=>{
+    await client.createMessage(session.channelID,{content:`Recording remains active: ${minutes===60?"1 hour":`${minutes} minutes`} remaining. It will automatically stop at <t:${Math.floor((Date.parse(session.startedAt)+session.maxDurationMs)/1000)}:F> and save normally. Manage Server admins can use /recordinglimit hours to change the maximum for future recordings.`,allowedMentions:{everyone:false,roles:false,users:false}});
+  };
   recordings.onDurationLimit=async session=>{
     const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);
     await panels.update();
@@ -312,9 +317,10 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
-    if(["schedule","retention","channelrules"].includes(commandName)){
+    if(["recordinglimit","schedule","retention","channelrules"].includes(commandName)){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required for automation settings.",flags:64});return;}
       const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value;await interaction.defer(64);
+      if(commandName==="recordinglimit"){const hours=value("hours");if(hours!==undefined)await settingsStore.update(guildID,{recordingDurationHours:hours});await interaction.editOriginalMessage({content:`Recording maximum: ${hours??settings.recordingDurationHours??DEFAULT_RECORDING_DURATION_HOURS} hours. Changes apply to new recordings; active recordings keep their original deadline.`});return;}
       if(commandName==="retention"){const days=value("days");if(days>0&&value("confirm")!==true)throw Error("Set confirm:true to enable permanent automatic deletion. Use days:0 to keep cleanup off.");await settingsStore.update(guildID,{retentionDays:days});await interaction.editOriginalMessage({content:days?`Automatic cleanup enabled: completed recordings and their exports older than ${days} days will be permanently deleted. Active, failed and interrupted recordings are preserved.`:"Automatic cleanup is off."});return;}
       if(commandName==="channelrules"){const mode=value("mode");if(mode==="status"){await interaction.editOriginalMessage({content:settings.autoJoinChannels===undefined?"Automatic joining may use any voice channel when enabled.":settings.autoJoinChannels.length?"Allowed channels: "+settings.autoJoinChannels.map(id=>`<#${id}>`).join(", "):"No channels allowed for automatic joining."});return;}if(mode==="all")await settingsStore.update(guildID,{autoJoinChannels:undefined});else{const channel=value("channel");if(guild.channels.get(channel)?.type!==2)throw Error("Choose a voice channel.");const channels=settings.autoJoinChannels??[];await settingsStore.update(guildID,{autoJoinChannels:mode==="add"?[...new Set([...channels,channel])]:channels.filter(id=>id!==channel)});}await interaction.editOriginalMessage({content:"Channel policy saved. Autojoin and autorecord remain at their current settings."});return;}
       const rules=settings.schedules??[],action=value("action");if(action==="list"){await interaction.editOriginalMessage({content:rules.length?rules.map(rule=>`${rule.id}: <#${rule.channelID}> at ${rule.time} ${rule.timezone}; days ${rule.days.join(",")}; ${rule.durationMinutes} minutes`).join("\n"):"No recurring recordings are enabled.",allowedMentions:{parse:[]}});return;}

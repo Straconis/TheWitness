@@ -13,8 +13,11 @@ export async function markInterruptedSessions(root: string): Promise<number> {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    const metadata = JSON.parse(contents);
-    if (metadata.state !== "recording") continue;
+    let metadata;
+    // One unreadable file must not stop the whole bot from starting.
+    try { metadata = JSON.parse(contents); }
+    catch (error) { console.warn(`[Recovery] Skipping unreadable session metadata in ${entry.name}.`, error); continue; }
+    if (!metadata || typeof metadata !== "object" || metadata.state !== "recording") continue;
     metadata.state = "interrupted";
     metadata.recoveredAt = new Date().toISOString();
     await writeFile(target + ".tmp", JSON.stringify(metadata, null, 2));

@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   console.log(`[Storage] Recordings: ${config.recordingPath}`);
 
   await storageMonitor.start().catch(error=>console.warn("[Storage] Disk-space check unavailable.",error));
-  const exportQueue = new ExportQueue(config.recordingPath);
+  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical);
   await exportQueue.load();
   const retention=new RetentionRunner(config.recordingPath,settingsStore,recordings,exportQueue);retention.start();
   const downloads = config.downloadPort

@@ -31,8 +31,8 @@ const pages:Record<string,string>={
   "Choose a topic below, or jump directly with `/help topic:Exports & formats`."
  ].join("\n\n"),
  recording:[
+  "**Recording maximum:** 8 hours by default. Manage Server admins use `/recordinglimit hours:12` (2, 4, 6, 8, 12, 16, or 24 hours); omit hours to view it. Changes apply to new recordings. Warnings at 1 hour, 30, 15, 5, and 1 minute remaining state the automatic stop time. At the limit, audio is saved normally and available for the same processing and ZIP downloads as `/stop`.",
   "**`/record channel:<voice-channel> [title]`** — Select the voice channel to record; the title is optional. You can start it from text chat without joining voice yourself, provided you can view and connect to the selected channel. One recording can be active per server; different servers can record simultaneously.",
-  "**8-hour maximum:** every session stops automatically after 8 hours, including silence and reconnect time. Audio is saved for export and the bot leaves voice. The panel explains the limit. Start a new recording to continue; the cap skips the sync end cue.",
   "**`/stop`** — Finish and save the current recording, then leave voice. A second `/stop` does not delete anything.",
   "**`/status`** — Check recording state, speaker count, saved packets, voice connection, and disk space.",
   "**`/note text:…`** — Add a timestamped note. The panel's **Add note** button does the same.",
@@ -79,7 +79,7 @@ const pages:Record<string,string>={
  permissions:[
   "**Who can use it?** Controls are open to all server members by default. A server can restrict them to a **Bot Wrangler** role. `/help` remains available to everyone.",
   "**`/access mode:role role:Bot Wrangler`** — Restrict controls to that role. `mode:everyone` opens controls; `mode:status` shows the policy. All `/access` operations require **Manage Server**, but work even if that manager lacks the Wrangler role.",
-  "**Manage Server is also required** for `/schedule`, `/eventrecord`, `/channelrules`, `/retention`, and `/delete`. If role restrictions are enabled, those commands also require the Wrangler role.",
+  "**Manage Server is also required** for `/recordinglimit`, `/schedule`, `/eventrecord`, `/channelrules`, `/retention`, and `/delete`. If role restrictions are enabled, those commands also require the Wrangler role.",
   "**`/delete session:<session-id> confirm:true`** — Permanently remove a saved recording and its exports. Check the session ID carefully.",
   "**`/retention days:30 confirm:true`** — Automatically delete completed recordings and exports older than 30 days. `days:0` disables cleanup (the default). Active, failed, and interrupted recordings are preserved.",
   "Recordings and command access are scoped to their server. **Private web links are bearer links:** anyone you give a valid link can use it. Changing the Wrangler role does not revoke already-shared links.",

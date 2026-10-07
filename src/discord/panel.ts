@@ -18,7 +18,8 @@ export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now()
   {name:"Packet drops",value:String(session.packetStats.duplicatesDropped+session.packetStats.latePacketsDropped),inline:true},
   {name:"Session",value:`\`${session.id}\``}
  ];
- if(session.stopReason==="duration-limit")fields.push({name:"8-hour session limit reached",value:"Recording stopped automatically. Start a new recording to continue."});
+ if(session.stopReason==="duration-limit")fields.push({name:`${session.durationHours}-hour session limit reached`,value:"Recording stopped automatically. Start a new recording to continue."});
+ if(session.stopReason==="low-disk")fields.push({name:"Disk space critically low",value:"Recording stopped automatically to protect saved audio. Free up space, then start a new recording."});
  if(session.stopReason==="empty-channel")fields.push({name:"Voice channel empty",value:"Event recording stopped after 60 seconds without human participants. Audio was saved."});
  if(lowSpace)fields.push({name:"⚠️ Low disk space",value:"Recording storage is running low. Ask the host operator to review available space."});
  if(context.serverName)fields.unshift({name:"Server",value:context.serverName.replace(/[\\`*_~|]/g,"\\$&").slice(0,256)});
