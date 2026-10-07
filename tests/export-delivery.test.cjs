@@ -11,7 +11,7 @@ test('completed project jobs deliver a signed ZIP and retain recording, mixer an
   await mkdir(path.join(root,sessionID,directory),{recursive:true});
   await writeFile(path.join(root,sessionID,directory,'project.zip'),'PK-fixture');
   await writeFile(path.join(root,sessionID,directory,'manifest.json'),JSON.stringify({format:'audacity',project:'project.zip',startedAt:'2026-10-02T12:00:00Z',tracks:[]}));
-  service=await DownloadService.create(root,'https://example.com');service.attach({get:()=>job},{get:()=>({})},{});
+  service=await DownloadService.create(root,'https://example.com');service.attach({get:()=>job,position:()=>undefined},{get:()=>({})},{});
   const port=await service.listen(0,'127.0.0.1');const local=url=>url.replace('https://example.com',`http://127.0.0.1:${port}`);
   for(const format of ['audacity','audition']){
    job.format=format;const response=await fetch(local(service.jobLink(jobID)),{headers:{Accept:'application/json'}});assert.equal(response.status,200);const data=await response.json();

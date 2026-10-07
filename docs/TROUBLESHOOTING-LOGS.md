@@ -49,3 +49,28 @@ node scripts/deploy-idle.cjs
 ```
 
 This check reports busy work using its exit status; a successful idle check can be silent. Do not restart the bot just to obtain logs.
+
+## Web portal setup
+
+DNS for `logs.thewitness.dev` points to the VPS through Cloudflare. Keep Cloudflare SSL/TLS in Full (strict) mode; the setup issues a Let's Encrypt origin certificate using the existing Certbot installation and renewal timer.
+
+On the VPS, after installing the portal scripts, run:
+
+```sh
+sudo bash /opt/the-witness/scripts/enable-log-portal.sh
+```
+
+The script asks for an operator username and a password of at least 16 characters, without printing the password. This login is separate from Discord and SSH credentials. It stores a scrypt hash, username, and known-secret redaction values in a root-only environment file at `/etc/the-witness-log-portal.env`. The public example leaves credentials blank. Re-running setup rotates the login credentials. Restarting the service applies manual configuration changes.
+
+The portal uses the browser's HTTP Basic login prompt over HTTPS. It polls every five seconds while the tab is visible, with bounded records and request concurrency, and provides a redacted text download. It has no recording, restart, deletion, file browsing, or shell controls. Every data and UI route requires login. Unknown journal units and arbitrary command arguments are never accepted from the browser.
+
+The service account `witness-logs` has journal-read group membership and no login shell. The application restricts reads to the fixed Witness service and checks each returned record's unit; it runs with a read-only filesystem, restricted process resources, and no privilege escalation. That journal group grants OS-level journal read access, so the service account must remain private. Credentials and private signed URLs are redacted where recognized; other log contents may still include private participant or server information.
+
+GitHub deployments copy updated viewer code and restart the portal when it is active. Root-owned credentials, certificates, and service configuration are preserved. The one-time setup adds a sudo rule for that specific service restart only.
+
+Check the portal itself over SSH:
+
+```sh
+systemctl status the-witness-log-portal.service --no-pager
+sudo journalctl -u the-witness-log-portal.service --since '1 hour ago' --no-pager
+```

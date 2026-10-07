@@ -10,7 +10,8 @@ import { StorageMonitor } from "../storage/space";
 import { renameSession,validateTitle } from "../storage/titles";
 import { downloadName } from "../downloads/names";
 import { deleteSession } from "../storage/delete";
-import { ExportQueue } from "../exports/jobs";
+import { ExportQueue, ExportJob } from "../exports/jobs";
+import { setTimeout as delay } from "node:timers/promises";
 import { recoverSession } from "../recording/salvage";
 import type { DownloadService } from "../downloads/service";
 import path from "node:path";
@@ -39,6 +40,19 @@ export async function closeAutomation():Promise<void>{if(eventOccupancyTimer)cle
 export async function closePanels():Promise<void>{await recordingPanels?.close();}
 export async function closeRecordingPanels():Promise<void>{try{await closeAutomation();}finally{await closePanels();}}
 const exportJobs = new Set<string>();
+const queuePositionText=(position:number)=>`Waiting in the export queue: position ${position}. It starts automatically when earlier exports finish.`;
+/** Discord-attachment exports wait their turn in the shared queue; Discord allows message edits for 15 minutes. */
+async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number)=>Promise<unknown>):Promise<ExportJob|undefined>{
+  let shown:number|undefined;const deadline=Date.now()+14*60*1000;
+  for(;;){
+    if(queue.stopping||Date.now()>=deadline)return undefined;
+    const job=queue.get(id);if(!job)throw new Error("Export job disappeared.");
+    if(["completed","failed","cancelled"].includes(job.state))return job;
+    const position=queue.position(id);
+    if(position&&position!==shown){shown=position;await onPosition(position).catch(error=>console.warn("[Export] Could not update queue position:",error));}
+    await delay(2000,undefined,{ref:false});
+  }
+}
 
 /** One server's failure (for example a missing applications.commands scope) must not skip the others. */
 async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild> = client.guilds.values()): Promise<void> {
@@ -350,7 +364,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");await interaction.defer(64);
       if(action==="cancel"){await exportQueue.cancel(id,guildID);await interaction.editOriginalMessage({content:"Cancellation requested. Your original recording is preserved. Files already uploaded to a cloud account are not deleted."});return;}
       if(action==="retry"){const next=await exportQueue.retry(id,guildID);await interaction.editOriginalMessage({content:`Retry queued: ${next.id}${downloads?"\n"+downloads.jobLink(next.id):""}`});return;}
-      await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${job.stage??"Waiting"}`});return;
+      const position=exportQueue.position(job.id);await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${position?queuePositionText(position):job.stage??"Waiting"}`});return;
     }
     if(commandName==="eventrecord"){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to configure event recording.",flags:64});return;}
@@ -436,11 +450,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
     if (commandName === "export") {
       await interaction.defer(64);
-      if (exportJobs.size) {
-        await interaction.editOriginalMessage({ content: "An export is already processing. Please try again when it finishes." });
+      // Servers share one queue (EXPORT_CONCURRENCY); only the unqueued fallback below keeps a per-server guard.
+      if (!exportQueue && exportJobs.has(guildID)) {
+        await interaction.editOriginalMessage({ content: "An export is already processing for this server. Please try again when it finishes." });
         return;
       }
-      exportJobs.add(guildID);
+      if (!exportQueue) exportJobs.add(guildID);
       try {
         const options = interaction.data?.options ?? [];
         const id = options.find((option: any) => option.name === "session")?.value;
@@ -451,13 +466,21 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         if(downloads&&exportQueue){
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
           const upload=options.find((option:any)=>option.name==="upload")?.value;
-          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat});
-          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}\n[Open export status](${downloads.jobLink(job.id)})`});return;
+          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat});const position=exportQueue.position(job.id);
+          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}${position?"\n"+queuePositionText(position):""}\n[Open export status](${downloads.jobLink(job.id)})`});return;
         }
         if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
           await interaction.editOriginalMessage({content:"Enable the download service to use queued transcription or cloud uploads."});return;
         }
-        const directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat });
+        let directory:string;
+        if (exportQueue) {
+          const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat });
+          await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`});
+          const job = await awaitExport(exportQueue, queued.id, position => interaction.editOriginalMessage({ content: queuePositionText(position) }));
+          if(!job){console.warn(`[Export] Attachment delivery stopped for job ${queued.id}; its queued export is preserved.`);return;}
+          if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
+          directory = path.join(config.recordingPath, job.sessionID, job.directory);
+        } else directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat });
         if (downloads) {
           const link = downloads.link(id, path.basename(directory));
           await interaction.editOriginalMessage({ content: `Your speaker tracks are ready.\n[Open private downloads](${link})\nThis link expires in 24 hours. Share it only with your group.` });
@@ -470,7 +493,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
           ? "This export is too large to attach in Discord. It is saved on the host; enable the download service to retrieve large recordings."
           : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues." });
-      } finally { exportJobs.delete(guildID); }
+      } finally { if (!exportQueue) exportJobs.delete(guildID); }
       return;
     }
 

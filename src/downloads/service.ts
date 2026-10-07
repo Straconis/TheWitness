@@ -200,7 +200,8 @@ export class DownloadService {
       mixerURL?.searchParams.set("editor","1");
       let downloadURL=result&&url.searchParams.get("mixed")==="1"?result:undefined;
       if(result&&["audacity","audition"].includes(job.format)){const target=new URL(result);target.pathname+="/project.zip";downloadURL=target.toString();}
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:job.stage,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
+      const position=this.queue!.position(job.id);
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:position?`Waiting in the export queue: position ${position}`:job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
       return this.html(response,exportProgressPage());
     }
     if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "POST") return this.error(response,405,"Method not allowed.");

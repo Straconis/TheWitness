@@ -34,3 +34,6 @@ work/
 
 # Audio build scratch
 ffbuild/
+
+# Python utility bytecode
+__pycache__/

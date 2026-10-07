@@ -217,7 +217,7 @@ test('critical storage blocks new recordings and queued exports resume when stor
 
 test('failed final metadata writes retry persistence without repeating a completed export',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-terminal-save-'));let runs=0,release,started=false;const gate=new Promise(resolve=>release=resolve);const queue=new ExportQueue(root,async()=>{runs++;started=true;await gate;return path.join(root,'out');});
- try{await queue.load();const session=await completedSession(root),job=await queue.enqueue(session.id,'guild','wav');await spin(()=>started);await rm(path.join(root,'jobs'),{recursive:true,force:true});t.mock.timers.enable({apis:['setTimeout']});release();await spin(()=>queue.cooldown);assert.equal(job.state,'completed');await mkdir(path.join(root,'jobs'));t.mock.timers.tick(30000);await spin(()=>queue.pendingPersistence.size===0&&!queue.worker);assert.equal(runs,1);assert.equal(JSON.parse(await readFile(path.join(root,'jobs',job.id+'.json'))).state,'completed');
+ try{await queue.load();const session=await completedSession(root),job=await queue.enqueue(session.id,'guild','wav');await spin(()=>started);await rm(path.join(root,'jobs'),{recursive:true,force:true});t.mock.timers.enable({apis:['setTimeout']});release();await spin(()=>queue.cooldown);assert.equal(job.state,'completed');await mkdir(path.join(root,'jobs'));t.mock.timers.tick(30000);await spin(()=>queue.pendingPersistence.size===0&&!queue.dispatching&&queue.running.size===0);assert.equal(runs,1);assert.equal(JSON.parse(await readFile(path.join(root,'jobs',job.id+'.json'))).state,'completed');
  }finally{t.mock.timers.reset();await queue.close();await rm(root,{recursive:true,force:true});}
 });
 
