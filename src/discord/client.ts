@@ -492,7 +492,6 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
             await interaction.editOriginalMessage({content:`Export job ${job.id} was cancelled.`}).catch((error:unknown)=>console.warn("[Export] Could not update cancellation status:",error));return;
           }
           if(job.state === "failed"){
-            console.error(`[Export] Job ${job.id} failed:`,job.error ?? "No error detail recorded.");
             await interaction.editOriginalMessage({content:`Export job ${job.id} failed. Your recording is still saved.\nCheck it with /exportjob action:status job:${job.id}`}).catch((error:unknown)=>console.warn("[Export] Could not update failure status:",error));return;
           }
           if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
