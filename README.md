@@ -6,6 +6,8 @@ The Witness is a multitrack Discord recording bot based on [Craig](https://craig
 
 **[Add The Witness to your Discord server](https://thewitness.dev/invite)**
 
+The bot supports simultaneous recordings across servers, with one active recording per server. Each server has its own voice connection, recording and settings. Exports share a host-wide queue; `EXPORT_CONCURRENCY` controls parallel processing (default 1). Practical capacity depends on VPS resources.
+
 ## Hosted or self-hosted — your choice
 
 A hosted version of The Witness is provided by the project owner for people who want to use the bot without running a server themselves. Self-hosting is optional: the source code is available so you can run your own instance, inspect how it works, or customize it if you want to. You do not need to deploy the source code to use the hosted version.
@@ -331,6 +333,8 @@ The private recording download panel offers Audition/Audacity projects and Ogg O
 For the current RackNerd host, an administrator can run `sudo bash /opt/the-witness/scripts/enable-downloads-ip.sh` once to configure HTTPS at the VPS IP, an nginx proxy to the loopback-only download service, and automatic IP certificate renewal. This setup requires idle recordings/exports and does not print the bot credentials. `DOWNLOAD_BIND_HOST` controls the listener address; the setup sets it to `127.0.0.1`.
 
 For `thewitness.dev`, run `sudo bash /opt/the-witness/scripts/enable-downloads-domain.sh` instead of the IP setup. It issues a domain certificate, enables the private download service at `https://thewitness.dev`, and configures automatic renewal. Cloudflare must route the domain to this VPS and permit HTTP ACME validation; use Full (strict) TLS mode once the origin certificate is installed. The website root returns 404 by design; access recordings through signed Discord Download links.
+
+The simple download-page excerpt form uses the original recording timeline. Exports with intros, silence cuts or editor changes direct you to the multitrack editor instead, so the requested segment comes from the timeline you actually hear.
 
 WAV, FLAC, MP3 and AAC excerpts trim directly during conversion from the corrected recording, avoiding an extra intermediate Opus encode. Ogg excerpts still require an Opus encode. Lossless output preserves the decoded source quality; it cannot restore information already lost in Discord Opus audio.
 

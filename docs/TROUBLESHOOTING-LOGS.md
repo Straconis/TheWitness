@@ -89,3 +89,5 @@ sudo bash /opt/the-witness/scripts/enable-log-portal.sh --refresh-redactions
 This reads the bot configuration, preserves the existing username/hash, atomically replaces the root-only portal environment file and restarts the portal. Do not print the environment file or inspect service environment values when diagnosing startup; use service state and its journal instead.
 
 The nginx rate limit currently counts Cloudflare edge addresses. Per-visitor limiting requires a root-owned nginx configuration change that trusts only Cloudflare's published source ranges before accepting its client-IP header. Authentication remains required for proxied and direct origin requests.
+
+Redaction refresh recognizes quoted multiline dotenv secrets, exported assignments, escaped newlines and comments following unquoted values. Individual multiline secret lines are also included for exact-value redaction when journal records split them. Redaction remains best-effort; refresh the snapshot whenever secrets change.

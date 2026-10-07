@@ -3,7 +3,7 @@ import {spawn,execFile} from "node:child_process";
 import {once} from "node:events";
 import {rename,rm} from "node:fs/promises";
 import path from "node:path";
-import {runTool,deprioritize} from "./process";
+import {runTool,deprioritize,processClosed} from "./process";
 const inspectTool=promisify(execFile);
 const loudnessRanges=new Map<string,Promise<number>>();
 /** Older host/CI builds cap LRA at 20; newer builds allow 50. Use the widest supported range. */
@@ -34,14 +34,14 @@ export async function measureLevel(file:string,ffmpeg:string,signal?:AbortSignal
  signal?.throwIfAborted();const range=await loudnessRange(ffmpeg);
  const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);
  const child=deprioritize(spawn(ffmpeg,["-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=${range}:print_format=json`,"-f","null","-"],{stdio:["ignore","ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
- let stderr="";child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
+ const closed=processClosed(child);let stderr="";child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
  try{
   const [code]=await once(child,"close");if(code!==0)throw Error("Cannot measure audio loudness: "+stderr);
   const json=/\{\s*"input_i"[\s\S]*?\}/.exec(stderr);if(!json)throw Error("Audio tool did not return loudness measurements. Rebuild the bundled FFmpeg with loudnorm enabled.");
   const data=JSON.parse(json[0]),numeric=(value:string):number=>value==="-inf"?-Infinity:value==="inf"?Infinity:Number(value),level={lufs:numeric(data.input_i),truePeak:numeric(data.input_tp),lra:numeric(data.input_lra),threshold:numeric(data.input_thresh),offset:numeric(data.target_offset)};
   if(Number.isNaN(level.lufs)||Number.isNaN(level.truePeak)||!Number.isFinite(level.lra)||(Number.isFinite(level.lufs)&&!Number.isFinite(level.threshold)))throw Error("Invalid loudness measurements.");
   return level;
- }catch(error){child.kill("SIGKILL");if(signal?.aborted)throw signal.reason;throw error;}
+ }catch(error){child.kill("SIGKILL");await closed;if(signal?.aborted)throw signal.reason;throw error;}
 }
 /** Constant gain for intro matching, capped by true peak and a 20 dB boost. */
 export function normalizationGain(level:AudioLevel,target=TARGET_LUFS,truePeak=TRUE_PEAK_DBTP):number{

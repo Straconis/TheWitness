@@ -30,7 +30,7 @@ test('saved session access is scoped to the server and rejects traversal', async
  try {
   const id = '11111111-1111-4111-8111-111111111111';
   await mkdir(path.join(root,id));
-  await writeFile(path.join(root,id,'session.json'),JSON.stringify({id,guildID:'one',startedAt:'2026-09-30',tracks:[],state:'completed'}));
+  await writeFile(path.join(root,id,'session.json'),JSON.stringify({id,guildID:'one',channelID:'voice',startedAt:'2026-09-30',tracks:[],state:'completed'}));
   assert.equal((await listSessions(root,'one')).length,1);
   assert.equal((await listSessions(root,'two')).length,0);
   await assert.rejects(getSession(root,id,'two'),/not found/);

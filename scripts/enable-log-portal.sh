@@ -11,7 +11,7 @@ test -f "$app/scripts/log-portal.py"
 test -x /opt/the-witness-certbot/bin/certbot
 # Generate private configuration before opening the public hostname.
 python3 - "$mode" <<'PY'
-import getpass, hashlib, json, os, secrets, sys
+import getpass, hashlib, json, os, re, secrets, sys
 from pathlib import Path
 filename=Path('/etc/the-witness-log-portal.env')
 refresh=sys.argv[1]=='--refresh-redactions'
@@ -37,10 +37,14 @@ else:
 values=[]
 source=Path('/opt/the-witness/.env')
 if source.exists():
- for line in source.read_text().splitlines():
-  if line.lstrip().startswith('#') or '=' not in line:continue
-  key,value=line.split('=',1);value=value.strip().strip('\"\'')
-  if any(part in key.upper() for part in ['TOKEN','SECRET','PASSWORD','PRIVATE_KEY']) and value:values.append(value)
+ # Parse quoted multiline values without executing configuration or importing deployed code.
+ assignment=re.compile(r"^[ \t]*(?:export[ \t]+)?([\w.-]+)[ \t]*=[ \t]*(?:\"((?:\\[\s\S]|[^\"])*)\"|'([^']*)'|`([^`]*)`|([^\r\n#]*))[ \t]*(?:#[^\r\n]*)?$",re.MULTILINE)
+ for match in assignment.finditer(source.read_text()):
+  key=match[1];value=next(part for part in match.groups()[1:] if part is not None)
+  if match[2] is not None:value=value.replace('\\n','\n').replace('\\r','\r')
+  if match[5] is not None:value=value.strip()
+  if any(part in key.upper() for part in ['TOKEN','SECRET','PASSWORD','PRIVATE_KEY']) and value:
+   values.append(value);values.extend(part for part in value.splitlines() if len(part)>=4 and part!=value)
 body='LOG_PORTAL_USERNAME='+username+'\nLOG_PORTAL_PASSWORD_HASH='+password_hash+'\nLOG_PORTAL_REDACT_VALUES='+json.dumps(json.dumps(values))+'\n'
 filename=Path('/etc/the-witness-log-portal.env')
 fd=os.open(str(filename)+'.next',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)

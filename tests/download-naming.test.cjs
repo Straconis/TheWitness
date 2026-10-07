@@ -39,7 +39,7 @@ test('private web headers honor saved naming choice and per-link override',async
   service=await DownloadService.create(root,'https://example.com');service.attach(undefined,restored);
   const port=await service.listen(0,'127.0.0.1');const page=new URL(service.link(id,exp).replace('https://example.com',`http://127.0.0.1:${port}`));
   const html=await (await fetch(page)).text();assert.ok(html.includes('Date + channel (UTC)'));assert.ok(html.includes('names=date-channel'));
-  await writeFile(path.join(root,id,'session.json'),JSON.stringify({id,guildID:'guild',channelID:'456',startedAt:manifest.startedAt}));
+  await writeFile(path.join(root,id,'session.json'),JSON.stringify({id,guildID:'guild',channelID:'456',startedAt:manifest.startedAt,state:'completed',tracks:[]}));
   await writeFile(path.join(dir,'manifest.json'),JSON.stringify({...manifest,channelName:undefined,channelID:undefined,guildID:'guild',format:'audition',project:'project.zip'}));
   const file=new URL(page);file.pathname+='/project.zip';
   for(const [style,name] of [[null,'2026-10-02-456.zip'],['date','2026-10-02.zip'],['original','project.zip']]){

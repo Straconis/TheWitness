@@ -1,4 +1,4 @@
-import { deprioritize } from "./process";
+import { deprioritize,processClosed } from "./process";
 import {measureLevel,normalizationGain,applyGain,AudioLevel,matchLoudness,LoudnessMatch,resolveLoudness} from "./normalization";
 import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut,silenceSeconds} from "./silence";
 import {getServerIntro,introPCM} from "./server-intro";
@@ -26,6 +26,7 @@ export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrac
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
   const child = spawn(executable, [String(track)], { stdio: ["pipe", "pipe", "pipe"],signal,killSignal:"SIGKILL" });
   deprioritize(child);
+  const closed=processClosed(child);
   let stderr = "";
   child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-8192); });
   const exited = once(child, "close").then(([code]) => {
@@ -42,9 +43,9 @@ async function correct(directory: string, track: number, target: string, executa
   const input = pipeline(Readable.from(chunks()), child.stdin);
   try { await Promise.all([exited, output, input]); }
   catch (error) {
-    child.kill();
+    child.kill("SIGKILL");
     child.stdin.destroy();
-    await Promise.allSettled([exited, output, input]);
+    await Promise.allSettled([closed, exited, output, input]);
     throw error;
   }
 }

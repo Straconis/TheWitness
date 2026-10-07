@@ -53,13 +53,16 @@ class Checks(unittest.TestCase):
    config=pathlib.Path(root)/'portal.env';source=pathlib.Path(root)/'bot.env'
    password_hash=p.hash_password('unchanged-password')
    config.write_text('LOG_PORTAL_USERNAME=operator\nLOG_PORTAL_PASSWORD_HASH='+password_hash+'\nLOG_PORTAL_REDACT_VALUES="[]"\n')
-   source.write_text('DISCORD_TOKEN=new-test-token\nBOT_SECRET="path\\with\\slashes$"\nNOT_SECRET=fixture\n')
+   source.write_text('DISCORD_TOKEN=new-test-token\nBOT_SECRET="path\\with\\slashes$"\nNOT_SECRET=fixture\nexport PRIVATE_KEY="BEGIN KEY\nPRIVATE-CONTENT\nEND KEY"\nOTHER_TOKEN=unquoted-value # comment\nESCAPED_SECRET="first\\nsecond"\n')
    code=code.replace('/etc/the-witness-log-portal.env',str(config)).replace('/opt/the-witness/.env',str(source))
    result=subprocess.run(['python3','-','--refresh-redactions'],input=code,capture_output=True,text=True,check=True)
    body=config.read_text();self.assertIn('LOG_PORTAL_PASSWORD_HASH='+password_hash,body)
    self.assertIn('LOG_PORTAL_USERNAME=operator',body);self.assertEqual(config.stat().st_mode&0o777,0o600)
    values=json.loads(json.loads(body.split('LOG_PORTAL_REDACT_VALUES=',1)[1].strip()))
    self.assertIn('new-test-token',values);self.assertIn('path\\with\\slashes$',values)
+   self.assertIn('BEGIN KEY\nPRIVATE-CONTENT\nEND KEY',values);self.assertIn('PRIVATE-CONTENT',values)
+   self.assertIn('unquoted-value',values);self.assertIn('first\nsecond',values)
+   self.assertNotIn('PRIVATE-CONTENT',p.redact('PRIVATE-CONTENT',values))
    self.assertNotIn('new-test-token',result.stdout)
  def test_refresh_missing_configuration_is_actionable(self):
   import tempfile
