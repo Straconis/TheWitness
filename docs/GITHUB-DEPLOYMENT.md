@@ -20,7 +20,7 @@ for rollback and may need occasional cleanup as disk space fills.
 One-time administrator setup:
 
 ```sh
-sudo bash /opt/the-witness/scripts/enable-github-deploy.sh
+sudo witness-admin deploy-permissions
 ```
 
 This adds a narrowly scoped sudo rule allowing `straconis` to restart only

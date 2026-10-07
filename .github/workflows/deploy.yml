@@ -45,4 +45,4 @@ jobs:
           printf '%s\n' "$VPS_KEY" > ~/.ssh/witness_deploy
           printf '%s\n' "$VPS_HOST_KEYS" > ~/.ssh/known_hosts
           { printf '%s\n' "$GITHUB_SHA"; cat /tmp/witness-release.tar.gz; } |
-            ssh -i ~/.ssh/witness_deploy -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 straconis@198.44.123.167 deploy
+            ssh -i ~/.ssh/witness_deploy -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 witness-deploy@198.44.123.167 deploy

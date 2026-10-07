@@ -10,8 +10,8 @@ for program in nginx python3 journalctl systemctl; do command -v "$program" >/de
 test -f "$app/scripts/log-portal.py"
 test -x /opt/the-witness-certbot/bin/certbot
 # Generate private configuration before opening the public hostname.
-python3 - "$mode" <<'PY'
-import getpass, hashlib, json, os, re, secrets, sys
+/usr/bin/python3 -I - "$mode" <<'PY'
+import getpass, hashlib, json, os, re, secrets, stat, sys
 from pathlib import Path
 filename=Path('/etc/the-witness-log-portal.env')
 refresh=sys.argv[1]=='--refresh-redactions'
@@ -24,9 +24,9 @@ if refresh:
  if len(parts)!=3 or parts[0]!='scrypt' or len(bytes.fromhex(parts[1]))!=16 or len(bytes.fromhex(parts[2]))!=32:raise SystemExit('Invalid existing password hash.')
 else:
  with open('/dev/tty','w') as terminal:
-  terminal.write('Operator username [straconis]: ');terminal.flush()
+  terminal.write('Operator username [watcher]: ');terminal.flush()
  with open('/dev/tty','r') as terminal:
-  username=terminal.readline().strip() or 'straconis'
+  username=terminal.readline().strip() or 'watcher'
  if not username.isascii() or not username.replace('_','').replace('-','').isalnum():raise SystemExit('Use letters, digits, underscores or hyphens for the username.')
  password=getpass.getpass('New portal password (at least 16 characters): ')
  if len(password)<16 or len(password)>1024:raise SystemExit('Use a password from 16 to 1024 characters.')
@@ -37,9 +37,15 @@ else:
 values=[]
 source=Path('/opt/the-witness/.env')
 if source.exists():
+ fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+ with os.fdopen(fd,'r') as config:
+  info=os.fstat(config.fileno())
+  if not stat.S_ISREG(info.st_mode) or info.st_size>1048576:raise SystemExit('Bot environment must be a regular file under 1 MiB.')
+  contents=config.read(1048577)
+ if len(contents)>1048576:raise SystemExit('Bot environment is too large.')
  # Parse quoted multiline values without executing configuration or importing deployed code.
  assignment=re.compile(r"^[ \t]*(?:export[ \t]+)?([\w.-]+)[ \t]*=[ \t]*(?:\"((?:\\[\s\S]|[^\"])*)\"|'([^']*)'|`([^`]*)`|([^\r\n#]*))[ \t]*(?:#[^\r\n]*)?$",re.MULTILINE)
- for match in assignment.finditer(source.read_text()):
+ for match in assignment.finditer(contents):
   key=match[1];value=next(part for part in match.groups()[1:] if part is not None)
   if match[2] is not None:value=value.replace('\\n','\n').replace('\\r','\r')
   if match[5] is not None:value=value.strip()
@@ -135,7 +141,7 @@ server {
 NGINX
 # Full setup must preserve visitor-IP restoration enabled by the operator.
 if [[ -f /etc/nginx/snippets/the-witness-cloudflare-real-ip.conf ]]; then
- python3 - <<'PYIP'
+ /usr/bin/python3 -I - <<'PYIP'
 from pathlib import Path
 site=Path('/etc/nginx/sites-available/the-witness-logs')
 marker=' server_name logs.thewitness.dev;'
@@ -148,7 +154,7 @@ fi
 nginx -t
 # Permit future GitHub deployments to restart only this additional service.
 tmp=$(mktemp)
-printf '%s\n' 'straconis ALL=(root) NOPASSWD: /usr/bin/systemctl restart the-witness-log-portal.service' > "$tmp"
+printf '%s\n' 'witness-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart the-witness-log-portal.service' > "$tmp"
 visudo -cf "$tmp"
 install -o root -g root -m 0440 "$tmp" /etc/sudoers.d/the-witness-log-portal
 rm -f "$tmp"

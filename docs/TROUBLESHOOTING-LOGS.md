@@ -57,7 +57,7 @@ DNS for `logs.thewitness.dev` points to the VPS through Cloudflare. Keep Cloudfl
 On the VPS, after installing the portal scripts, run:
 
 ```sh
-sudo bash /opt/the-witness/scripts/enable-log-portal.sh
+sudo witness-admin log-setup
 ```
 
 The script asks for an operator username and a password of at least 16 characters, without printing the password. This login is separate from Discord and SSH credentials. It stores a scrypt hash, username, and known-secret redaction values in a root-only environment file at `/etc/the-witness-log-portal.env`. The public example leaves credentials blank. Re-running setup rotates the login credentials. Restarting the service applies manual configuration changes.
@@ -83,19 +83,21 @@ Systemd's own crash, OOM and core-dump messages for Witness appear alongside the
 After rotating or adding bot secrets, refresh the exact-value redaction snapshot without changing the portal login:
 
 ```sh
-sudo bash /opt/the-witness/scripts/enable-log-portal.sh --refresh-redactions
+sudo witness-admin refresh-redactions
 ```
 
 This reads the bot configuration, preserves the existing username/hash, atomically replaces the root-only portal environment file and restarts the portal. Do not print the environment file or inspect service environment values when diagnosing startup; use service state and its journal instead.
 
-On October 7, 2026 the operator enabled Cloudflare visitor-IP restoration in the dedicated log virtual host. Nginx trusts only validated Cloudflare source ranges before using CF-Connecting-IP, so the existing rate-limit key uses visitor addresses for proxied requests. Direct origin clients cannot override their address with that header. Authentication remains required for both paths. The maintenance helper is committed as scripts/configure-witness-log-real-ip.py and installed by source deployments. Full portal setup preserves the existing Cloudflare snippet; redaction-only refresh and normal source deployments preserve the nginx configuration too.
+On October 7, 2026 the operator enabled Cloudflare visitor-IP restoration in the dedicated log virtual host. Nginx trusts only validated Cloudflare source ranges before using CF-Connecting-IP, so the existing rate-limit key uses visitor addresses for proxied requests. Direct origin clients cannot override their address with that header. Authentication remains required for both paths. The maintenance helper is committed as scripts/configure-witness-log-real-ip.py; its privileged reviewed copy is installed separately under /usr/local/libexec/the-witness-admin and invoked through witness-admin. Deployments cannot replace that root-owned copy. Full portal setup preserves the existing Cloudflare snippet; redaction-only refresh and normal source deployments preserve the nginx configuration too.
 
 Redaction refresh recognizes quoted multiline dotenv secrets, exported assignments, escaped newlines and comments following unquoted values. Individual multiline secret lines are also included for exact-value redaction when journal records split them. Redaction remains best-effort; refresh the snapshot whenever secrets change.
 
 Cloudflare ranges are a snapshot taken when the helper runs. Refresh them periodically (for example, during monthly host maintenance) and whenever Cloudflare announces a range change:
 
 ```sh
-sudo python3 /opt/the-witness/scripts/configure-witness-log-real-ip.py
+sudo witness-admin cloudflare-ips
 ```
 
 The helper downloads and validates the current official IPv4/IPv6 ranges, backs up configuration, checks nginx syntax and reloads it. Failed validation/reload restores the previous files. This does not rotate credentials or restart the recorder.
+
+See [root administration and deployment separation](ROOT-ADMIN-BOUNDARY.md) for the reviewed tool installation and dedicated deployment account. Portal login is watcher; its password is unchanged.

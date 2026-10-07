@@ -5,14 +5,14 @@ app=/opt/the-witness
 address=198.44.123.167
 cd "$app"
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-exec 9> .releases/deploy.lock
+exec 9> /run/lock/the-witness-admin-downloads.lock
 flock -n 9 || { echo "A deployment is running; try setup again when it finishes."; exit 1; }
-node scripts/deploy-idle.cjs prepare
-trap 'node scripts/deploy-idle.cjs clear' EXIT
-node scripts/deploy-idle.cjs || { echo 'Wait for recordings and exports to finish, then run setup again.'; exit 1; }
+/usr/sbin/runuser -u witness-deploy -- /usr/local/bin/node scripts/deploy-idle.cjs prepare
+trap '/usr/sbin/runuser -u witness-deploy -- /usr/local/bin/node scripts/deploy-idle.cjs clear' EXIT
+/usr/sbin/runuser -u witness-deploy -- /usr/local/bin/node scripts/deploy-idle.cjs || { echo 'Wait for recordings and exports to finish, then run setup again.'; exit 1; }
 apt-get update
 apt-get install -y nginx python3-venv
-python3 -m venv /opt/the-witness-certbot
+/usr/bin/python3 -I -m venv /opt/the-witness-certbot
 /opt/the-witness-certbot/bin/pip install 'certbot>=5.4,<6'
 mkdir -p /var/www/the-witness-acme
 if [[ -L /etc/nginx/sites-enabled/default && $(readlink /etc/nginx/sites-enabled/default) == /etc/nginx/sites-available/default ]]; then
@@ -82,7 +82,7 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 # Preserve credentials and other environment settings without printing them.
-python3 - <<'PY'
+/usr/sbin/runuser -u witness-deploy -- /usr/bin/python3 -I - <<'PY'
 from pathlib import Path
 p=Path('.env');settings={'DOWNLOAD_PORT':'3000','DOWNLOAD_PUBLIC_URL':'https://198.44.123.167','DOWNLOAD_BIND_HOST':'127.0.0.1'}
 lines=p.read_text().splitlines();lines=[line for line in lines if line.split('=',1)[0] not in settings]
