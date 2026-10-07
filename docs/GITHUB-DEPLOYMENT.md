@@ -17,14 +17,16 @@ recordings, private-link keys, server settings and audio models stay in place.
 The revision is recorded in `.releases/current-revision`; old releases are kept
 for rollback and may need occasional cleanup as disk space fills.
 
-One-time administrator setup:
+Deployment uses the dedicated `witness-deploy` account; administrator SSH remains on `straconis`. See [the root administration boundary](ROOT-ADMIN-BOUNDARY.md) for the reviewed migration and protected tools. Do not run application-directory scripts with sudo.
+
+Administrator permission maintenance after the protected tools are installed:
 
 ```sh
 sudo witness-admin deploy-permissions
 ```
 
-This adds a narrowly scoped sudo rule allowing `straconis` to restart only
-`the-witness.service`. It does not grant arbitrary passwordless sudo.
+This adds a narrowly scoped sudo rule allowing `witness-deploy` to restart only
+`the-witness.service` and `the-witness-log-portal.service`. It does not grant arbitrary passwordless sudo.
 
 Deployments hold a lock and wait up to 30 minutes for active recordings and export
 jobs to finish. New work is paused during this wait after the deployment-aware code
