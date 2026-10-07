@@ -43,7 +43,7 @@ const exportJobs = new Set<string>();
 const queuePositionText=(position:number)=>`Waiting in the export queue: position ${position}. It starts automatically when earlier exports finish.`;
 /** Discord-attachment exports wait their turn in the shared queue; Discord allows message edits for 15 minutes. */
 async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:number|undefined)=>Promise<unknown>):Promise<ExportJob|undefined>{
-  let shown:number|undefined;const deadline=Date.now()+14*60*1000;
+  let shown:number|undefined|null=null;const deadline=Date.now()+14*60*1000;
   for(;;){
     if(queue.stopping||Date.now()>=deadline)return undefined;
     const job=queue.get(id);if(!job)throw new Error("Export job disappeared.");
@@ -490,6 +490,10 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           }
           if(job.state === "cancelled"){
             await interaction.editOriginalMessage({content:`Export job ${job.id} was cancelled.`}).catch((error:unknown)=>console.warn("[Export] Could not update cancellation status:",error));return;
+          }
+          if(job.state === "failed"){
+            console.error(`[Export] Job ${job.id} failed:`,job.error ?? "No error detail recorded.");
+            await interaction.editOriginalMessage({content:`Export job ${job.id} failed. Your recording is still saved.\nCheck it with /exportjob action:status job:${job.id}`}).catch((error:unknown)=>console.warn("[Export] Could not update failure status:",error));return;
           }
           if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
           directory = path.join(config.recordingPath, job.sessionID, job.directory);

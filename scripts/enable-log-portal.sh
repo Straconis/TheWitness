@@ -16,6 +16,7 @@ from pathlib import Path
 filename=Path('/etc/the-witness-log-portal.env')
 refresh=sys.argv[1]=='--refresh-redactions'
 if refresh:
+ if not filename.is_file():raise SystemExit('Portal is not configured; run enable-log-portal.sh setup first.')
  existing=dict(line.split('=',1) for line in filename.read_text().splitlines() if '=' in line)
  username=existing['LOG_PORTAL_USERNAME'];password_hash=existing['LOG_PORTAL_PASSWORD_HASH']
  if not username.isascii() or not username.replace('_','').replace('-','').isalnum():raise SystemExit('Invalid existing username.')

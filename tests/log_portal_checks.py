@@ -61,6 +61,15 @@ class Checks(unittest.TestCase):
    values=json.loads(json.loads(body.split('LOG_PORTAL_REDACT_VALUES=',1)[1].strip()))
    self.assertIn('new-test-token',values);self.assertIn('path\\with\\slashes$',values)
    self.assertNotIn('new-test-token',result.stdout)
+ def test_refresh_missing_configuration_is_actionable(self):
+  import tempfile
+  installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()
+  code=installer.split("<<'PY'\n",1)[1].split('\nPY',1)[0]
+  with tempfile.TemporaryDirectory() as root:
+   code=code.replace('/etc/the-witness-log-portal.env',str(pathlib.Path(root)/'missing.env'))
+   result=subprocess.run(['python3','-','--refresh-redactions'],input=code,capture_output=True,text=True)
+   self.assertNotEqual(result.returncode,0);self.assertIn('run enable-log-portal.sh setup first',result.stderr)
+   self.assertNotIn('Traceback',result.stderr)
  def test_installer_username_prompt_on_a_real_terminal(self):
   import os, pty, fcntl, termios
   installer=(pathlib.Path(__file__).parents[1]/'scripts/enable-log-portal.sh').read_text()
