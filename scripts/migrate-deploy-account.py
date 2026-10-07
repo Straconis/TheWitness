@@ -2,6 +2,7 @@
 """Explicit root-only migration, executed from a reviewed pinned bundle."""
 import fcntl, json, os, pathlib, pwd, re, shutil, stat, subprocess, tempfile
 APP=pathlib.Path('/opt/the-witness')
+DATA=pathlib.Path('/var/lib/the-witness/recordings')
 UNIT=pathlib.Path('/etc/systemd/system/the-witness.service')
 OLD='straconis'
 NEW='witness-deploy'
@@ -68,10 +69,19 @@ def main():
         rule.write_text(NEW+' ALL=(root) NOPASSWD: /usr/bin/systemctl restart the-witness.service, /usr/bin/systemctl restart the-witness-log-portal.service\n')
         run('/usr/sbin/visudo','-cf',str(rule))
         run('/usr/bin/systemctl','stop','the-witness.service');stopped=True
-        for directory,dirs,files in os.walk(APP,followlinks=False):
-            for path in [pathlib.Path(directory),*(pathlib.Path(directory)/name for name in dirs+files)]:
-                info=path.lstat();owners.append((str(path),info.st_uid,info.st_gid));os.chown(path,new.pw_uid,new.pw_gid,follow_symlinks=False)
+        # Recordings are deliberately outside the application checkout on this host.
+        # These are fixed reviewed roots, never arbitrary paths returned by application code.
+        if not DATA.is_dir() or DATA.is_symlink() or DATA.resolve()!=DATA:
+            raise RuntimeError('Unexpected external recordings directory; refusing ownership changes')
+        seen=set()
+        for tree in (APP,DATA):
+            for directory,dirs,files in os.walk(tree,followlinks=False):
+                for path in [pathlib.Path(directory),*(pathlib.Path(directory)/name for name in dirs+files)]:
+                    if str(path) in seen:continue
+                    seen.add(str(path));info=path.lstat();owners.append((str(path),info.st_uid,info.st_gid))
+        # Persist rollback ownership before changing any inode, including external private data.
         (backup/'ownership.json').write_text(json.dumps(owners))
+        for path,uid,gid in owners:os.chown(path,new.pw_uid,new.pw_gid,follow_symlinks=False)
         atomic(UNIT,body.replace('User='+OLD,'User='+NEW).replace('Group='+OLD,'Group='+NEW))
         atomic(policies[0],rule.read_text(),0o440)
         policies[1].unlink(missing_ok=True)
