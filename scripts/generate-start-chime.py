@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate assets/audio/witness-start.ogg, The Witness's original start chime.
+"""Regenerate assets/audio/witness-chime.ogg, The Witness's original start chime.
 Pure synthesis (no samples or third-party audio). Requires the bundled ffmpeg with libopus.
 Usage: python3 scripts/generate-start-chime.py [ffmpeg-path]"""
 import math, os, struct, subprocess, sys, tempfile, wave
@@ -17,7 +17,7 @@ tail=int(0.15*rate)
 for i in range(total-tail,total): buf[i]*=(total-i)/tail
 peak=max(abs(x) for x in buf); buf=[x/peak*0.6 for x in buf]
 ffmpeg=sys.argv[1] if len(sys.argv)>1 else os.path.join(os.path.dirname(__file__),'..','bin','ffmpeg')
-out=os.path.join(os.path.dirname(__file__),'..','assets','audio','witness-start.ogg')
+out=os.path.join(os.path.dirname(__file__),'..','assets','audio','witness-chime.ogg')
 os.makedirs(os.path.dirname(out),exist_ok=True)
 with tempfile.TemporaryDirectory() as tmp:
     wav=os.path.join(tmp,'chime.wav')

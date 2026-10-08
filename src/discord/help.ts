@@ -68,7 +68,7 @@ const pages:Record<string,string>={
   "Private links expire (check the expiry shown on the page). Anyone holding a link can use it while valid; share it only with your group."
  ].join("\n\n"),
  automation:[
-  "**`/startsound mode:status|default|custom|off`** — A short recording notice plays once when a new recording starts (default on). Changes require **Manage Server**; status is open. Upload a custom sound in the manager `/dashboard` first (5 MB, 0.2–10 seconds). Off leaves participants relying on the recording panel. Reconnects and stopping never replay the sound.",
+  "**`/startsound mode:status|default|custom|off`** — A recording notice plays once when a new recording starts (default on). Changes require **Manage Server**; status is open. Upload a custom sound in the manager `/dashboard` first (5 MB, 0.2–10 seconds). Off leaves participants relying on the recording panel. Reconnects and stopping never replay the sound.",
   "Automatic recording starts **off** for a new server. These settings belong to each server separately.",
   "**`/autojoin mode:enable|disable|status`** — Join when an eligible member enters voice. Enabling only joins; it does not start recording. Disabling also turns autorecord off.",
   "**`/autorecord mode:enable|disable|status`** — Enabling turns on both autojoin and automatic recording. Disabling leaves autojoin enabled. These react to subsequent voice joins.",

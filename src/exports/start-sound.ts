@@ -33,7 +33,7 @@ export async function validateOggOpus(file:string):Promise<number>{
  return seconds;
 }
 export async function getStartSound(root:string,guild:string,id?:string):Promise<StartSound|undefined>{if(!id)return;if(!sessionIDPattern.test(id))throw Error("Invalid start sound ID.");try{const sound=JSON.parse(await readFile(path.join(startSoundDirectory(root,guild),id+".json"),"utf8"));if(sound.id!==id||typeof sound.name!=="string"||!Number.isFinite(sound.seconds)||sound.seconds<0.2||sound.seconds>10)throw Error("Invalid saved start sound.");return sound;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}}
-export async function resolveDefaultStartSound(override=process.env.START_SOUND_DEFAULT_PATH?.trim(),bundled=bundledStartSound):Promise<string|undefined>{if(override){try{await validateOggOpus(override);return override;}catch{console.warn("[Start sound] Invalid default override; using the bundled chime.");}}try{await validateOggOpus(bundled);return bundled;}catch{console.warn("[Start sound] Bundled chime unavailable; playback skipped.");}}
+export async function resolveDefaultStartSound(override=process.env.START_SOUND_DEFAULT_PATH?.trim(),bundled=bundledStartSound):Promise<string|undefined>{if(override){try{await validateOggOpus(override);return override;}catch{console.warn("[Start sound] Invalid default override; using the bundled recording notice.");}}try{await validateOggOpus(bundled);return bundled;}catch{console.warn("[Start sound] Bundled recording notice unavailable; playback skipped.");}}
 let defaultFile:Promise<string|undefined>|undefined;
 export async function initializeStartSound():Promise<void>{if(startSoundEnabled())await(defaultFile??=resolveDefaultStartSound());}
 const warnings=new WeakMap<object,{reported:boolean;clear:()=>void}>();
@@ -41,7 +41,7 @@ export function handleStartSoundError(connection:object,error:Error):boolean{con
 export async function playStartSound(connection:any,root:string,guild:string,choice:GuildSettings["startSound"],canSpeak:boolean,stillRecording:()=>boolean,resolveDefault:()=>Promise<string|undefined>=()=>defaultFile??=resolveDefaultStartSound()):Promise<void>{
  if(!startSoundEnabled()||choice?.mode==="off")return;if(!canSpeak){console.warn("[Start sound] Missing Speak permission; playback skipped.");return;}
  let file:string|undefined;
- if(choice?.mode==="custom"&&choice.customID){try{file=startSoundPath(root,guild,choice.customID);await validateOggOpus(file);}catch{console.warn("[Start sound] Custom chime unavailable; using the default.");file=undefined;}}
+ if(choice?.mode==="custom"&&choice.customID){try{file=startSoundPath(root,guild,choice.customID);await validateOggOpus(file);}catch{console.warn("[Start sound] Custom sound unavailable; using the default.");file=undefined;}}
  file??=await resolveDefault();if(!file||!stillRecording()||connection.playing)return;
  const clear=()=>{clearTimeout(timer);connection.removeListener("end",clear);warnings.delete(connection);};const timer=setTimeout(clear,11000);timer.unref();warnings.set(connection,{reported:false,clear});connection.once("end",clear);
  try{connection.play(file,{format:"ogg"});}catch(error){handleStartSoundError(connection,error as Error);clear();}
