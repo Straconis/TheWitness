@@ -29,7 +29,7 @@ jobs:
       - name: Package release
         run: |
           npm prune --omit=dev
-          tar -czf /tmp/witness-release.tar.gz dist node_modules bin/oggcorrect package.json package-lock.json src scripts cook licenses LICENSE README.md docs
+          tar -czf /tmp/witness-release.tar.gz dist node_modules bin/oggcorrect package.json package-lock.json src scripts cook licenses LICENSE README.md docs assets
       - name: Deploy tested release over SSH
         env:
           VPS_KEY: ${{ secrets.WITNESS_VPS_SSH_KEY }}

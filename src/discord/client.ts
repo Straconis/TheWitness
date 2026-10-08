@@ -1,3 +1,4 @@
+import {playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
 import {protectRecordingSpace} from "../exports/storage";
 import {UserError,commandErrorMessage} from "../errors";
 import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
@@ -68,6 +69,7 @@ async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:numb
 async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild> = client.guilds.values()): Promise<void> {
   for (const guild of guilds) {
     const registered = await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"startsound",description:"Configure the recording start notice (changes need Manage Server).",options:[{type:3,name:"mode",description:"Start sound mode",required:true,choices:["status","default","custom","off"].map(value=>({name:value,value}))}]},
       {type:1,name:"recordinglimit",description:"Set the recording maximum (Manage Server required).",options:[{type:4,name:"hours",description:"Maximum hours; omit to show current setting",choices:RECORDING_DURATION_HOURS.map(value=>({name:`${value} hours`,value}))}]},
       {type:1,name:"schedule",description:"Opt into recurring recording (Manage Server required).",options:[{type:3,name:"action",description:"Schedule action",required:true,choices:[{name:"Add",value:"add"},{name:"Remove",value:"remove"},{name:"List",value:"list"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]},{type:3,name:"time",description:"Start HH:MM in the selected time zone"},{type:3,name:"days",description:"Weekdays as numbers: 0=Sun, 1=Mon, … 6=Sat (comma-separated)"},{type:3,name:"timezone",description:"IANA time zone, e.g. America/New_York (default UTC)"},{type:4,name:"minutes",description:"Recording duration in minutes",min_value:1,max_value:1440},{type:3,name:"title",description:"Recording title",max_length:120},{type:3,name:"id",description:"Schedule ID to remove"}]},
       {type:1,name:"retention",description:"Opt into deleting old completed recordings (Manage Server required).",options:[{type:4,name:"days",description:"Keep completed recordings this many days; 0 disables cleanup",required:true,min_value:0,max_value:3650},{type:5,name:"confirm",description:"Confirm automatic permanent deletion"}]},
@@ -193,10 +195,13 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
 
 /** Join and start recording; if this call joined but recording cannot start, leave instead of idling in voice. */
 async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID: string, title?: string): Promise<RecordingSession> {
+  const existing=recordings.sessions.get(guild.id);
   const wasConnected = client.voiceConnections.has(guild.id);
   const connection = await joinVoiceChannel(client, guild, channelID);
   try {
+    recordings.selfUserID=client.user.id;
     const session = await recordings.start(guild, channelID, connection, () => client.joinVoiceChannel(channelID, {opusOnly:true,selfDeaf:false}));
+    if(session!==existing){void (async()=>{const channel=guild.channels.get(channelID);await playStartSound(connection,config.recordingPath,guild.id,settingsStore.get(guild.id).startSound,Boolean(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak")),()=>recordings.sessions.get(guild.id)===session&&session.state==="recording");})().catch(error=>console.warn("[Start sound] Playback skipped:",error));}
     if (title) await session.setTitle(title);
     return session;
   } catch (error) {
@@ -310,7 +315,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     }
     // Access-policy configuration bypasses the role gate; its handler requires Manage Server.
     const configuringAccess=interaction.type===2&&interaction.data?.name==="access";
-    if([2,3,5].includes(interaction.type)&&wranglerSettings&&!configuringAccess&&!mayUseBot(wranglerSettings,interaction.member?.roles)){
+    const readingStartSoundStatus=interaction.type===2&&interaction.data?.name==="startsound"&&(interaction.data.options?.find((option:any)=>option.name==="mode")?.value??"status")==="status";
+    if([2,3,5].includes(interaction.type)&&wranglerSettings&&!configuringAccess&&!readingStartSoundStatus&&!mayUseBot(wranglerSettings,interaction.member?.roles)){
       try{await interaction.createMessage({content:"The Witness is restricted to the configured Bot Wrangler role. Ask a server manager to assign you the role or switch access to everyone.",flags:64});}catch(error){console.warn("[Access] Could not send access response.",error);}return;
     }
     const downloadSelection=interaction.type===3?/^witness:download:([a-f0-9-]{36})$/i.exec(interaction.data?.custom_id??""):null;
@@ -363,6 +369,16 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
 
     const settings = getSettings(guildID);
 
+    if(commandName==="startsound"){
+      const mode=interaction.data.options?.find((option:any)=>option.name==="mode")?.value??"status",choice=settingsStore.get(guildID).startSound??{mode:"default"};
+      if(!["status","default","custom","off"].includes(mode))throw new UserError("Invalid start sound mode.");
+      if(mode!=="status"){
+        if(!interaction.member?.permissions?.has("manageGuild"))throw new UserError("Manage Server permission is required to change the start sound.");
+        if(mode==="custom"){if(!choice.customID||!await getStartSound(config.recordingPath,guildID,choice.customID))throw new UserError("Upload a custom start sound in the manager dashboard first.");await validateOggOpus(startSoundPath(config.recordingPath,guildID,choice.customID));}
+        await settingsStore.update(guildID,{startSound:{...choice,mode}});
+      }
+      await interaction.createMessage({content:`Start sound: ${mode==="status"?choice.mode:mode}.${process.env.START_SOUND?.trim()==="off"?" The host has disabled all start sounds.":""}${mode==="off"?" Participants will rely on the recording panel message to know recording started.":""}`,flags:64});return;
+    }
     if(["recordinglimit","schedule","retention","channelrules"].includes(commandName)){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required for automation settings.",flags:64});return;}
       const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value;await interaction.defer(64);

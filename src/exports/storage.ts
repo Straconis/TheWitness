@@ -38,7 +38,7 @@ export async function cleanTransientArtifacts(root:string):Promise<void>{
  try{for(const entry of await readdir(path.join(root,"jobs"),{withFileTypes:true}))if(entry.isFile()&&entry.name.endsWith(".json.tmp")&&sessionIDPattern.test(entry.name.slice(0,-9)))await rm(path.join(root,"jobs",entry.name));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
 }
 /** Age out regenerable artifacts; keep editor work and recursively retain its source exports. */
-export async function sweepArtifacts(root:string,active:ExportJob[],introIDs:Set<string>,now=Date.now()):Promise<void>{
+export async function sweepArtifacts(root:string,active:ExportJob[],introIDs:Set<string>,now=Date.now(),soundIDs:Set<string>=new Set()):Promise<void>{
  for(const entry of await directories(root)){
   let ambiguous=false;const parent=path.join(root,entry.name),artifacts=new Map<string,{source?:string;keep:boolean}>();
   for(const child of await readdir(parent,{withFileTypes:true}))if(child.isDirectory()&&exportName.test(child.name)){
@@ -51,6 +51,16 @@ export async function sweepArtifacts(root:string,active:ExportJob[],introIDs:Set
   if(ambiguous)continue;
   let changed=true;while(changed){changed=false;for(const item of artifacts.values())if(item.keep&&item.source){const source=artifacts.get(item.source);if(source&&!source.keep){source.keep=true;changed=true;}}}
   for(const [name,item] of artifacts)if(!item.keep)await rm(path.join(parent,name),{recursive:true,force:true});
+ }
+ const soundRoot=path.join(root,"start-sounds");let soundServers:import("node:fs").Dirent[]=[];
+ try{soundServers=await readdir(soundRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+ for(const server of soundServers)if(server.isDirectory()&&/^[a-f0-9]{64}$/.test(server.name)){
+  const dir=path.join(soundRoot,server.name);
+  for(const file of await readdir(dir,{withFileTypes:true})){
+   const target=path.join(dir,file.name);const age=now-(await lstat(target)).mtimeMs;
+   if(file.isDirectory()&&file.name.startsWith("upload-")&&sessionIDPattern.test(file.name.slice(7))&&age>3600000)await rm(target,{recursive:true,force:true});
+   else if(file.isFile()&&/\.(ogg|json)$/.test(file.name)){const id=file.name.slice(0,file.name.lastIndexOf("."));if(sessionIDPattern.test(id)&&!soundIDs.has(id)&&age>EXPORT_RETENTION_MS)await rm(target,{force:true});}
+  }
  }
  const introRoot=path.join(root,"server-intros");let servers;try{servers=await readdir(introRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
  for(const server of servers)if(server.isDirectory()&&/^[a-f0-9]{64}$/.test(server.name)){

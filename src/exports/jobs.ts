@@ -31,7 +31,7 @@ export class ExportQueue {
  private sequence=0;
  private pendingPersistence=new Set<ExportJob>();
  private assertUploadAllowed(guildID:string):void{const allowed=(process.env.CLOUD_UPLOAD_GUILD_IDS??"").split(",").map(id=>id.trim()).filter(Boolean);if(allowed.length&&!allowed.includes(guildID))throw new UserError("Cloud uploads are not enabled for this server.");}
- constructor(private root:string,private exporter=exportSession,private diskCritical:()=>Promise<boolean>|boolean=()=>false,private concurrency=exportConcurrency(),private inspectSpace?:()=>Promise<StorageSpace>){if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");this.accounts=new CloudAccounts(root);}
+ constructor(private root:string,private exporter=exportSession,private diskCritical:()=>Promise<boolean>|boolean=()=>false,private concurrency=exportConcurrency(),private inspectSpace?:()=>Promise<StorageSpace>,private startSoundReferences:()=>Set<string>=()=>new Set()){if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");this.accounts=new CloudAccounts(root);}
  private save(job:ExportJob):Promise<void>{const body=JSON.stringify(job,null,2),file=path.join(this.root,"jobs",job.id+".json");const task=(this.saves.get(job.id)??Promise.resolve()).catch(()=>{}).then(async()=>{await writeFile(file+".tmp",body);await rename(file+".tmp",file);});this.saves.set(job.id,task);void task.finally(()=>{if(this.saves.get(job.id)===task)this.saves.delete(job.id);}).catch(()=>{});return task;}
  async load(start=true):Promise<void>{
   await mkdir(path.join(this.root,"jobs"),{recursive:true});
@@ -123,7 +123,7 @@ export class ExportQueue {
  }
  maintenance(now=Date.now()):Promise<void>{
   const task=this.submissions.catch(()=>{}).then(async()=>{for(const [id,job] of this.jobs)if(["completed","failed","cancelled"].includes(job.state)&&!this.running.has(id)&&!this.saves.has(id)){try{const file=path.join(this.root,"jobs",id+".json");if(now-(await stat(file)).mtimeMs>JOB_RETENTION_MS){await rm(file);this.jobs.delete(id);}}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}}
-   await sweepArtifacts(this.root,[...this.jobs.values()].filter(job=>["queued","running","cancelling"].includes(job.state)),new Set([...this.jobs.values()].map(job=>job.introID).filter((id):id is string=>!!id)),now);
+   await sweepArtifacts(this.root,[...this.jobs.values()].filter(job=>["queued","running","cancelling"].includes(job.state)),new Set([...this.jobs.values()].map(job=>job.introID).filter((id):id is string=>!!id)),now,this.startSoundReferences());
   });this.submissions=task;return task;
  }
  async close():Promise<void>{this.stopped=true;if(this.diskGuard)clearInterval(this.diskGuard);if(this.maintenanceTimer)clearInterval(this.maintenanceTimer);if(this.cooldown){clearTimeout(this.cooldown);this.cooldown=undefined;}for(const controller of this.active.values())controller.abort(new Error("Export service stopping."));await this.submissions.catch(()=>{});await this.dispatching;await Promise.allSettled([...this.running.values()]);await Promise.all([...this.saves.values()]);for(const job of this.pendingPersistence)await this.save(job);this.pendingPersistence.clear();}

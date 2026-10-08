@@ -226,6 +226,18 @@ The dashboard and `/status` show available space and a low-space warning. No
 automatic deletion of original recordings is enabled by default. Sessions default to an 8-hour maximum, configurable with `/recordinglimit` (2–24 hours). Filesystem
 free space does not necessarily reflect hosting-provider storage quotas. Below `CRITICAL_DISK_MIB` (default 256 MiB, capped at half the warning threshold; `0` disables it), running exports are interrupted and requeued first, with temporary output removed. Recordings are finalized only if a fresh disk check remains critical. New recordings and exports pause until space is freed; original audio is preserved.
 
+## Recording start sound
+
+A short original chime plays once after a **new recording is active**, including manual, automatic, scheduled and event starts. Reconnects and stopping do not replay it. Playback is independent of capture: missing Speak permission, missing audio or playback failure leaves recording running. The recording panel remains the visual notice. The sound does not replace participant consent.
+
+`/startsound mode:status|default|custom|off` shows or changes this server’s mode. Changes require Manage Server (and the Wrangler role in restricted servers); status is open. Existing servers default to the bundled chime. Managers can upload a WAV, FLAC, MP3 or Ogg file through `/dashboard` (up to 5 MB, 0.2–10 seconds), preview it, then choose Custom. Conversion targets -20 LUFS / -3 dBTP with stereo 48 kHz Opus, 96 kb/s and 20 ms frames. A missing/unreadable custom sound falls back to the default. Off relies on the recording panel notice.
+
+Host setting `START_SOUND=on|off` defaults to on and overrides all server choices when off. Optional `START_SOUND_DEFAULT_PATH` must be a regular stereo Ogg Opus file, no larger than 1 MiB, with 20 ms frames and 0.2–10 seconds of valid audio. It is checked at startup; invalid overrides warn and fall back to `assets/audio/witness-start.ogg`. Default playback does not invoke FFmpeg. Restart after changing host settings or the default asset.
+
+Custom sounds live under the recording root in `start-sounds/<hashed-server>/<id>.ogg|json`. Abandoned uploads expire after one hour and unreferenced sounds after 48 hours; a settings `customID` is preserved even in Default or Off mode, so it can be selected again. Manager-signed previews are private. The bundled chime was synthesized without Craig or third-party recordings; see [asset provenance](assets/audio/README.md) and `scripts/generate-start-chime.py`.
+
+Discord does not return the bot’s outgoing audio as a speaker track, and capture explicitly ignores the bot’s own user ID. A participant microphone can still pick up acoustic echo of the chime. Verify outgoing playback with Discord voice encryption (DAVE) and listen for microphone echo during the live test.
+
 ## Compact Discord recording panel
 
 `/record` posts one compact panel in the command's text channel, updating it

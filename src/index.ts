@@ -1,3 +1,4 @@
+import {initializeStartSound} from "./exports/start-sound";
 import {cleanTransientArtifacts} from "./exports/storage";
 import {shutdownInOrder} from "./shutdown";
 import { RetentionRunner } from "./automation/retention";
@@ -18,9 +19,10 @@ async function main(): Promise<void> {
   });
 
   await settingsStore.load();
+  await initializeStartSound();
 
   await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
-  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check());
+  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>settings.startSound?.customID).filter((id):id is string=>!!id)));
   setStorageExportQueue(exportQueue);
   // Cleanup may reclaim space needed to persist recovery metadata, before workers start.
   await exportQueue.load(false);

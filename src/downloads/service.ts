@@ -1,3 +1,4 @@
+import {getStartSound,startSoundPath,uploadStartSoundChunk,validateOggOpus} from "../exports/start-sound";
 import { exportProgressPage } from "./export-progress-page";
 import { invitePage } from "./invite-page";
 import { legalPage } from "./legal-page";
@@ -76,7 +77,11 @@ export class DownloadService {
     const guildID=url.pathname.slice(11),canManage=url.searchParams.get("manager")==="1";
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,intro:await getServerIntro(this.root,guildID),integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
+      const preview=url.searchParams.get("preview-start-sound");
+      if(preview){if(!canManage)return this.error(response,403,"Manager dashboard required.");const file=startSoundPath(this.root,guildID,preview);await validateOggOpus(file);response.writeHead(200,{"Content-Type":"audio/ogg","Cache-Control":"no-store"});response.end(await readFile(file));return;}
+      const choice=this.settings.get(guildID).startSound??{mode:"default"},custom=await getStartSound(this.root,guildID,choice.customID);
+      const previewURL=custom&&canManage?this.dashboardLink(guildID,true)+"&preview-start-sound="+custom.id:undefined;
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,startSound:{mode:choice.mode,custom,previewURL},intro:await getServerIntro(this.root,guildID),integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage(canManage));
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -85,7 +90,18 @@ export class DownloadService {
     const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
       const data=JSON.parse(body);
-      if(["settings","upload-intro"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
+      if(["settings","upload-intro","upload-start-sound","start-sound-mode"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
+      if(data.action==="upload-start-sound"){
+        const result=await uploadStartSoundChunk(this.root,guildID,data);
+        if(result.sound){const choice=this.settings.get(guildID).startSound??{mode:"default"};await this.settings.update(guildID,{startSound:{...choice,customID:result.id}});}
+        return this.json(response,200,result);
+      }
+      if(data.action==="start-sound-mode"){
+        if(!["default","custom","off"].includes(data.mode))throw Error("Invalid start sound mode.");
+        const choice=this.settings.get(guildID).startSound??{mode:"default"};
+        if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom start sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
+        await this.settings.update(guildID,{startSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
+      }
       if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,guildID,data));
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");

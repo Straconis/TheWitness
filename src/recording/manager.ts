@@ -1,3 +1,4 @@
+import {handleStartSoundError} from "../exports/start-sound";
 import { SessionSync } from "./sync";
 import type {SettingsStore} from "../storage/settings";
 import { assertDeploymentIdle } from "../storage/deployment";
@@ -13,6 +14,7 @@ export const DEFAULT_RECONNECT_DELAYS = [1000,2000,4000,8000,15000,30000,30000,3
 export class RecordingManager {
  onDurationWarning?: (session:RecordingSession,minutes:number) => Promise<void>;
  onDurationLimit?: (session:RecordingSession) => Promise<void>;
+ selfUserID?:string;
  readonly sessions=new Map<string,RecordingSession>();
  private cleanup=new Map<string,()=>void>();private buffers=new Map<string,PacketBuffer>();
  private locks=new Map<string,Promise<unknown>>();private reconnecting=new Map<string,AbortController>();private shuttingDown=false;
@@ -53,9 +55,9 @@ export class RecordingManager {
   let failing=false;
   const fail=(error:Error)=>{if(failing)return;failing=true;console.error("[Recording] Capture failed:",error);void this.exclusive(guild.id,()=>this.stop(guild.id,error)).catch(error=>console.error("[Recording] Finalization failed:",error));};
   const write=(packets:VoicePacket[])=>{for(const packet of packets)void session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival).catch(fail);};
-  const onData=(data:Buffer,userID:string,timestamp:number)=>{if(!userID||failing)return;try{write(buffer.push({data,userID,username:guild.members.get(userID)?.username??userID,timestamp,arrival:session.elapsedSamples()}));}catch(error){fail(error as Error);}};
+  const onData=(data:Buffer,userID:string,timestamp:number)=>{if(!userID||userID===this.selfUserID||failing)return;try{write(buffer.push({data,userID,username:guild.members.get(userID)?.username??userID,timestamp,arrival:session.elapsedSamples()}));}catch(error){fail(error as Error);}};
   const timer=setInterval(()=>{if(!failing)write(buffer.flushAged(session.elapsedSamples()));},50);timer.unref();
-  const onError=(error:Error)=>console.error(`[Voice ${session.id}]`,error);
+  const onError=(error:Error)=>{if(!handleStartSoundError(connection,error))console.error(`[Voice ${session.id}]`,error);};
   const onDisconnect=(error?:Error)=>{
    if(this.reconnecting.has(guild.id)||this.shuttingDown)return;
    if(!error){
