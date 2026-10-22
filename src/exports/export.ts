@@ -1,7 +1,9 @@
+import {assertSoundcraftLength,soundcraftExportSeconds} from "./soundcraft-limits";
+import {writeSoundcraftProject,BackupProject,validateSavedBackups} from "./soundcraft-backup";
 import { deprioritize,processClosed } from "./process";
 import {measureLevel,normalizationGain,applyGain,AudioLevel,matchLoudness,LoudnessMatch,resolveLoudness} from "./normalization";
 import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut,silenceSeconds} from "./silence";
-import {getServerIntro,introPCM} from "./server-intro";
+import {getServerIntro,introPCM,introRecordingID,IntroScope} from "./server-intro";
 import {validateMixExclusions} from "./mix-selection";
 import {resolveAudioFormat,ProjectTrackFormat} from "./formats";
 import { exportEdited } from "./edited-export";
@@ -19,8 +21,8 @@ import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity";
-export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean; introID?:string; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string }
+export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity" | "soundcraft";
+export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean; introID?:string; introScope?:IntroScope; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string; backupProjects?:BackupProject[] }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
@@ -80,7 +82,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   await mkdir(temporary);
   try {
     if(options.edits)validateEdits(options.edits,metadata.tracks.map((track:any)=>track.track));
-    const intro=options.introID?await getServerIntro(root,metadata.guildID,options.introID):undefined;if(options.introID&&!intro)throw Error("Saved intro not found.");
+    const intro=options.introID?await getServerIntro(root,metadata.guildID,options.introID,introRecordingID(options.introScope,sessionID),metadata.channelID):undefined;if(options.introID&&!intro)throw Error("Saved intro not found.");
+    if(requestedFormat==="soundcraft"){if(options.edits)validateEdits(options.edits);assertSoundcraftLength(soundcraftExportSeconds(metadata,options,intro?.seconds??0));}
     const rawTracks:Array<{file:string;userID:string;username:string}>=[];
     const manifest: Array<{ file: string; userID: string; username: string }> = [];
     for (const track of metadata.tracks) {
@@ -125,10 +128,10 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     const loudnessMatches:Record<string,LoudnessMatch>={};
     if(options.normalizeAudio||(intro&&options.normalizeIntro)){
       const levels=new Map<string,AudioLevel>();for(const track of manifest){const file=path.join(temporary,track.file),level=await measureLevel(file,ffmpegPath(options),options.signal,false,loudnessSettings);if(options.normalizeAudio){const matched=await matchLoudness(file,codecs[format],ffmpegPath(options),options.signal,level,loudnessSettings);loudnessMatches[track.file]=matched;levels.set(track.file,matched.after);}else levels.set(track.file,level);}
-      if(intro&&options.normalizeIntro){const selected=manifest.filter(track=>!(options.excludeFromMix??[]).includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>levels.get(track.file)!).filter(level=>Number.isFinite(level.lufs));if(selected.length){const target=10*Math.log10(selected.reduce((sum,level)=>sum+10**(level.lufs/10),0)/selected.length),level=await measureLevel(introPCM(root,metadata.guildID,intro.id),ffmpegPath(options),options.signal,true,loudnessSettings);introGain=normalizationGain(level,target,loudnessSettings.maxTruePeakDBTP);}}
+      if(intro&&options.normalizeIntro){const selected=manifest.filter(track=>!(options.excludeFromMix??[]).includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>levels.get(track.file)!).filter(level=>Number.isFinite(level.lufs));if(selected.length){const target=10*Math.log10(selected.reduce((sum,level)=>sum+10**(level.lufs/10),0)/selected.length),level=await measureLevel(introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),ffmpegPath(options),options.signal,true,loudnessSettings);introGain=normalizationGain(level,target,loudnessSettings.maxTruePeakDBTP);}}
     }
     if(intro)for(const track of manifest){const file=track.file;if(intro){const shifted=path.join(temporary,`shifted-${file}`);await convert(["-i",path.join(temporary,file),"-af",`adelay=${Math.round(intro.seconds*48000)}S:all=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),shifted],ffmpegPath(options),options.signal);await rename(shifted,path.join(temporary,file));}}
-    if(intro){const number=Math.max(...metadata.tracks.map((track:{track:number})=>track.track))+1,file=`track-${number}.${format==="aac"?"m4a":format}`;await convert(["-f","s16le","-ar","48000","-ac","2","-i",introPCM(root,metadata.guildID,intro.id),"-af",`volume=${introGain}`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);manifest.push({file,userID:"server-intro",username:"Intro: "+intro.name});}
+    if(intro){const number=Math.max(...metadata.tracks.map((track:{track:number})=>track.track))+1,file=`track-${number}.${format==="aac"?"m4a":format}`;await convert(["-f","s16le","-ar","48000","-ac","2","-i",introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),"-af",`volume=${introGain}`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);manifest.push({file,userID:"server-intro",username:"Intro: "+intro.name});}
     let mix: string | undefined;
     if (options.mix) {
       mix = `mix.${format==="aac"?"m4a":format}`;
@@ -156,9 +159,11 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     let syncCues;
     try{const sync=JSON.parse(await readFile(path.join(directory,"sync-cues.json"),"utf8"));syncCues={version:1,sessionID,cues:sync.cues.filter((cue:any)=>cue.state==="captured").map((cue:any)=>{const audioSeconds=cue.seconds-(metadata.audioOrigin??0)/48000;return {...cue,recordingSeconds:cue.seconds,originalAudioSeconds:audioSeconds,exportSeconds:!options.edits&&audioSeconds>=start&&(end===undefined||audioSeconds<end)&&(!trailingSilenceCut||audioSeconds-start<trailingSilenceCut.start)?shiftedTime(audioSeconds-start,silenceCuts)+(intro?.seconds??0):null};}),timingModified:!!(options.edits||options.trimSilence||options.trimEndSilence||intro||start||end!==undefined),note:"Cues identify timing differences; edits and processing can change alignment. For sync, use original audio and visual cue positions."};}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
+    const backupProjects=validateSavedBackups(options.backupProjects,requestedFormat);
+    if(requestedFormat==="soundcraft")await writeSoundcraftProject(temporary,manifest,exportedNotes,metadata.title,backupProjects);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ syncCues, sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, trackFormat:["audition","audacity"].includes(requestedFormat)?format:undefined, project:(["audition","audacity"].includes(requestedFormat)||options.includeRaw)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, loudness:(options.normalizeAudio||options.normalizeIntro)?{standard:"EBU R128 / ITU-R BS.1770",targetLUFS:loudnessSettings.targetLUFS,truePeakDBTP:loudnessSettings.maxTruePeakDBTP,tracks:loudnessMatches}:undefined, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceSeconds:options.trimSilence?(options.silenceSeconds??30):undefined, rawTracks:options.includeRaw?rawTracks:undefined, trimEndSilence:options.trimEndSilence??false, trailingSilenceCut, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence||options.trimEndSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
-    if(["audition","audacity"].includes(requestedFormat)||options.includeRaw)await writeProjectZip(temporary,options.signal);
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ syncCues, sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, backupProjects:backupProjects?.length?backupProjects:undefined, trackFormat:["audition","audacity","soundcraft"].includes(requestedFormat)?format:undefined, project:(["audition","audacity","soundcraft"].includes(requestedFormat)||options.includeRaw)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, loudness:(options.normalizeAudio||options.normalizeIntro)?{standard:"EBU R128 / ITU-R BS.1770",targetLUFS:loudnessSettings.targetLUFS,truePeakDBTP:loudnessSettings.maxTruePeakDBTP,tracks:loudnessMatches}:undefined, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceSeconds:options.trimSilence?(options.silenceSeconds??30):undefined, rawTracks:options.includeRaw?rawTracks:undefined, trimEndSilence:options.trimEndSilence??false, trailingSilenceCut, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence||options.trimEndSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    if(["audition","audacity","soundcraft"].includes(requestedFormat)||options.includeRaw)await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);
     return target;

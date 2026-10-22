@@ -1,3 +1,7 @@
+import {recordingSeconds,SOUNDCRAFT_RAM_NOTICE} from "../exports/soundcraft-limits";
+import {soundcraftChoiceScript} from "./soundcraft-choice";
+import {backupChoiceHTML,backupChoiceScript} from "./backup-choice";
+import {backupMode,backupLabel,validateBackupMode,validateSavedBackups} from "../exports/soundcraft-backup";
 import {getStartSound,startSoundPath,uploadStartSoundChunk,validateOggOpus} from "../exports/start-sound";
 import { exportProgressPage } from "./export-progress-page";
 import { invitePage } from "./invite-page";
@@ -37,7 +41,7 @@ import { startKeepAlive } from "./keepalive";
 export const MAX_BROWSER_GUESTS = 8;
 
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
-const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup)|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/;
+const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup|scraft)|project\.zip|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
 
 export class DownloadService {
@@ -45,11 +49,18 @@ export class DownloadService {
   private sockets = new WebSocketServer({ noServer:true, maxPayload:1924 });
   private guestCounts = new Map<string,number>();
   private activeGuests=new Map<string,Set<string>>();
+  private introChannels?: (guildID:string)=>Array<{id:string;name:string}>;
+  setIntroChannels(provider:(guildID:string)=>Array<{id:string;name:string}>):void{this.introChannels=provider;}
   private space?:StorageMonitor;
   private queue?:ExportQueue;
   private settings?:SettingsStore;
   private manager?:RecordingManager;
   attach(queue:ExportQueue,settings:SettingsStore,manager:RecordingManager,space?:StorageMonitor):void {this.space=space;this.queue=queue;this.settings=settings;this.manager=manager;}
+  private async channelIntros(guildID:string):Promise<Array<{id:string;name:string;intro?:import("../exports/server-intro").ServerIntro}>>{
+    const known=new Map((this.introChannels?.(guildID)??[]).map(channel=>[channel.id,channel]));
+    for(const session of await listSessions(this.root,guildID))if(!known.has(session.channelID))known.set(session.channelID,{id:session.channelID,name:session.channelName||session.channelID});
+    return Promise.all([...known.values()].sort((a,b)=>a.name.localeCompare(b.name)).map(async channel=>({...channel,intro:await getServerIntro(this.root,guildID,undefined,undefined,channel.id,false)})));
+  }
   private liveSession(id:string):RecordingSession|undefined {return [...(this.manager?.sessions.values() ?? [])].find(session=>session.id===id);}
   private issue(route:string,lifetimeSeconds=86400,manager=false):string {const expires=String(Math.floor(Date.now()/1000)+lifetimeSeconds);return `${this.publicURL}${route}?expires=${expires}&signature=${this.signature(route+(manager?"\nmanager":""),expires)}${manager?"&manager=1":""}`;}
   recordingLink(id:string,lifetimeSeconds=86400):string {if(!sessionIDPattern.test(id))throw new Error("Invalid session.");return this.issue(`/recording/${id}`,lifetimeSeconds);}
@@ -81,7 +92,7 @@ export class DownloadService {
       if(preview){if(!canManage)return this.error(response,403,"Manager dashboard required.");const file=startSoundPath(this.root,guildID,preview);await validateOggOpus(file);response.writeHead(200,{"Content-Type":"audio/ogg","Cache-Control":"no-store"});response.end(await readFile(file));return;}
       const choice=this.settings.get(guildID).startSound??{mode:"default"},custom=await getStartSound(this.root,guildID,choice.customID);
       const previewURL=custom&&canManage?this.dashboardLink(guildID,true)+"&preview-start-sound="+custom.id:undefined;
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,startSound:{mode:choice.mode,custom,previewURL},intro:await getServerIntro(this.root,guildID),integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,soundcraftBackup:backupMode(this.settings.get(guildID)),startSound:{mode:choice.mode,custom,previewURL},intro:canManage?await getServerIntro(this.root,guildID):undefined,introChannels:canManage?await this.channelIntros(guildID):undefined,integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage(canManage));
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -90,7 +101,7 @@ export class DownloadService {
     const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
       const data=JSON.parse(body);
-      if(["settings","upload-intro","upload-start-sound","start-sound-mode"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
+      if(["settings","upload-intro","upload-start-sound","start-sound-mode","soundcraft-backup"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
       if(data.action==="upload-start-sound"){
         const result=await uploadStartSoundChunk(this.root,guildID,data);
         if(result.sound){const choice=this.settings.get(guildID).startSound??{mode:"default"};await this.settings.update(guildID,{startSound:{...choice,customID:result.id}});}
@@ -102,14 +113,19 @@ export class DownloadService {
         if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom start sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
         await this.settings.update(guildID,{startSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
       }
-      if(data.action==="upload-intro")return this.json(response,200,await uploadIntroChunk(this.root,guildID,data));
+      if(data.action==="soundcraft-backup"){validateBackupMode(data.mode);await this.settings.update(guildID,{soundcraftBackup:data.mode});return this.json(response,200,{saved:true,soundcraftBackup:data.mode});}
+      if(data.action==="upload-intro"){
+        const channelID=data.channelID||undefined;
+        if(channelID&&(typeof channelID!=="string"||!(await this.channelIntros(guildID)).some(channel=>channel.id===channelID)))throw Error("Choose a channel from this Discord server.");
+        return this.json(response,200,await uploadIntroChunk(this.root,guildID,data,undefined,channelID));
+      }
       if(data.action==="settings"){
         if(typeof data.autoJoin!=="boolean"||typeof data.autoRecord!=="boolean")throw new Error("Invalid settings.");
         if(data.downloadNaming!==undefined&&!["date","date-channel","original"].includes(data.downloadNaming))throw new Error("Invalid download naming style.");
         await this.settings.update(guildID,{autoJoin:data.autoRecord||data.autoJoin,autoRecord:data.autoRecord,...(data.downloadNaming?{downloadNaming:data.downloadNaming}: {}),...(data.sync!==undefined?{sync:data.sync}:{})});return this.json(response,200,{saved:true});
       }
       if(data.action==="title"){await this.manager.exclusive(guildID,async()=>{const active=this.manager!.sessions.get(guildID);if(active&&active.id===data.session)await active.setTitle(data.title);else await renameSession(this.root,data.session,guildID,data.title);});return this.json(response,200,{saved:true});}
-      if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true,{transcribe:data.transcribe===true,upload:data.upload||undefined});return this.json(response,202,{url:this.jobLink(job.id)});}
+      if(data.action==="export"){const job=await this.queue.enqueue(data.session,guildID,data.format as ExportFormat,data.mix===true,{transcribe:data.transcribe===true,upload:data.upload||undefined,backupProjects:data.backupProjects});return this.json(response,202,{url:this.jobLink(job.id)});}
       if(data.action==="recover"){const id=await this.manager.exclusive(guildID,()=>recoverSession(this.root,data.session,guildID));return this.json(response,200,{id});}
       return this.json(response,400,{error:"Unknown action."});
     }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Request failed."});}
@@ -191,15 +207,17 @@ export class DownloadService {
       const metadata=JSON.parse(await readFile(path.join(this.root,id,"session.json"),"utf8"));
       const saved=await getSession(this.root,id,metadata.guildID);
       if(saved.state!=="completed"||!saved.tracks.length)return this.error(response,400,"This recording has no completed audio tracks to download.");
-      if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady(),await getServerIntro(this.root,saved.guildID)));
+      if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady(),await getServerIntro(this.root,saved.guildID,undefined,undefined,saved.channelID),backupMode(this.settings?.get(saved.guildID)??{})));
       if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
       const body=await this.readBody(request,800000);if(body===undefined)return this.json(response,413,{error:"Request too large."});
       try{
-        const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,403,{error:"Server intros can only be uploaded through a manager dashboard link from /dashboard."});resolveAudioFormat(data.format,data.trackFormat);
-        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{targetLUFS:data.targetLUFS,maxTruePeakDBTP:data.maxTruePeakDBTP,normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true});
-        const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity"].includes(data.format))jobURL.searchParams.set("mixed","1");
+        const data=JSON.parse(body);if(data.action==="upload-intro")return this.json(response,403,{error:"Server intros can only be uploaded through a manager dashboard link from /dashboard."});
+        if(data.action==="upload-custom-intro")return this.json(response,200,await uploadIntroChunk(this.root,saved.guildID,data,id));
+        resolveAudioFormat(data.format,data.trackFormat);
+        const job=await this.queue.enqueue(id,saved.guildID,data.format,data.mix===true,{targetLUFS:data.targetLUFS,maxTruePeakDBTP:data.maxTruePeakDBTP,normalizeAudio:data.normalizeAudio===true,normalizeIntro:data.normalizeIntro===true,trimSilence:data.trimSilence===true,trimEndSilence:data.trimEndSilence===true,silenceSeconds:data.silenceSeconds,includeRaw:data.includeRaw===true,includeIntro:data.includeIntro===true,introScope:data.introScope==="recording"?"recording":"server",introID:data.includeIntro===true?data.introID:undefined,excludeFromMix:data.excludeFromMix,trackFormat:data.trackFormat as ProjectTrackFormat,transcribe:data.transcribe===true,backupProjects:data.backupProjects});
+        const jobURL=new URL(this.jobLink(job.id));if(data.mixedOnly===true&&data.mix===true&&!["audition","audacity","soundcraft"].includes(data.format))jobURL.searchParams.set("mixed","1");
         return this.json(response,202,{url:jobURL.toString()});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
     }
@@ -221,12 +239,12 @@ export class DownloadService {
         catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Job action failed."});}
       }
       let result=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
-      if(result&&url.searchParams.get("mixed")==="1"&&job.mix&&!["audition","audacity"].includes(job.format)){const target=new URL(result);target.pathname+="/mix."+(job.format==="aac"?"m4a":job.format);result=target.toString();}
+      if(result&&url.searchParams.get("mixed")==="1"&&job.mix&&!["audition","audacity","soundcraft"].includes(job.format)){const target=new URL(result);target.pathname+="/mix."+(job.format==="aac"?"m4a":job.format);result=target.toString();}
       const exportURL=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
       const mixerURL=exportURL?new URL(job.sourceExport?this.link(job.sessionID,job.sourceExport):exportURL):undefined;
       mixerURL?.searchParams.set("editor","1");
       let downloadURL=result&&url.searchParams.get("mixed")==="1"?result:undefined;
-      if(result&&["audacity","audition"].includes(job.format)){const target=new URL(result);target.pathname+="/project.zip";downloadURL=target.toString();}
+      if(result&&["audacity","audition","soundcraft"].includes(job.format)){const target=new URL(result);target.pathname+="/project.zip";downloadURL=target.toString();}
       const position=this.queue!.position(job.id);
       if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:position?(job.stage?.startsWith("Waiting for disk space")?`${job.stage} Queue position ${position}.`:`Waiting in the export queue: position ${position}`):job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
       return this.html(response,exportProgressPage());
@@ -262,7 +280,7 @@ export class DownloadService {
       let edits:unknown;try{edits=JSON.parse(await readFile(path.join(directory,"editor-state.json"),"utf8"));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
       if(manifest.notes)manifest.notesData=JSON.parse(await readFile(path.join(directory,"notes.json"),"utf8"));return this.json(response,200,{manifest,waves,edits});
     }
-    if(!filename&&request.method==="GET"&&url.searchParams.get("editor")==="1")return this.html(response,editorPage());
+    if(!filename&&request.method==="GET"&&url.searchParams.get("editor")==="1")return this.html(response,editorPage(backupMode(this.settings?.get(manifest.guildID)??{})));
     if(request.method==="POST"){
       if(filename||!this.queue)return this.error(response,405,"Method not allowed.");
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
@@ -273,7 +291,7 @@ export class DownloadService {
         if(data.action==="save-edit"||data.action==="editor-export"){
           validateEdits(data.edits,manifest.tracks.map((track:any)=>Number(/^track-(\d+)\./.exec(track.file)?.[1])));
           if(data.action==="save-edit"){const temporary=path.join(directory,"editor-state-"+randomUUID()+".tmp");await writeFile(temporary,JSON.stringify(data.edits));await import("node:fs/promises").then(fs=>fs.rename(temporary,path.join(directory,"editor-state.json")));return this.json(response,200,{saved:true});}
-          const job=await this.queue.enqueue(parts[2]!,manifest.guildID,data.format??"wav",data.mix===true,{sourceExport:parts[3]!,edits:data.edits,transcribe:data.transcribe===true});return this.json(response,202,{url:this.jobLink(job.id)});
+          const job=await this.queue.enqueue(parts[2]!,manifest.guildID,data.format??"wav",data.mix===true,{sourceExport:parts[3]!,edits:data.edits,transcribe:data.transcribe===true,backupProjects:data.backupProjects});return this.json(response,202,{url:this.jobLink(job.id)});
         }
         if(!sourceExcerptAllowed)throw new Error("This export has timeline changes. Use the multitrack editor to excerpt these files, or choose an excerpt from an unprocessed export.");
         const start=Number(data.start??0),end=data.end===undefined||data.end===""?undefined:Number(data.end),baseStart=manifest.trim?.start??0,baseEnd=manifest.trim?.end;
@@ -281,7 +299,7 @@ export class DownloadService {
         if(baseEnd!==undefined&&(baseStart+start>=baseEnd||(end!==undefined&&baseStart+end>baseEnd)))throw new Error("Trim range exceeds this shared excerpt.");
         const source=JSON.parse(await readFile(path.join(this.root,parts[2]!,"session.json"),"utf8"));
         await getSession(this.root,parts[2]!,source.guildID);
-        const job=await this.queue.enqueue(parts[2]!,source.guildID,data.format??manifest.format,data.mix===true,{trimStart:baseStart+start,trimEnd:end===undefined?baseEnd:baseStart+end});
+        const job=await this.queue.enqueue(parts[2]!,source.guildID,data.format??manifest.format,data.mix===true,{trimStart:baseStart+start,trimEnd:end===undefined?baseEnd:baseStart+end,backupProjects:data.backupProjects});
         return this.json(response,202,{url:this.jobLink(job.id)});
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Cannot prepare edit."});}
     }
@@ -294,11 +312,17 @@ export class DownloadService {
       if(manifest.rawTracks&&(!Array.isArray(manifest.rawTracks)||!manifest.rawTracks.every((track:any)=>/^raw-track-\d+\.flac$/.test(track.file)&&typeof track.username==="string")))throw Error("Invalid original track manifest.");
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="metadata" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
       const rawLinks=(manifest.rawTracks??[]).map((track:any)=>`<li><a href="${route}/${escapeHTML(track.file)}${query}">Uncut original: ${escapeHTML(track.username)}</a> (FLAC)</li>`).join("");
-      const extras = [[manifest.project,"Download project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
-      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<p><a href="${escapeHTML(this.recordingLink(parts[2]!))}">Choose another format or mixdown speakers</a></p><p><a href="${route}${query}&amp;editor=1">Open multitrack editor</a></p><ul>${extras}${links}${rawLinks}</ul>${this.queue&&sourceExcerptAllowed?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","audacity","ogg","wav","flac","mp3","aac"].map(value=>`<option value="${value}">${value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase()}</option>`).join("")}</select><label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:this.queue?"<p>This export has timeline changes. Use the multitrack editor to make an excerpt from these files.</p>":""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
+      let backups:ReturnType<typeof validateSavedBackups>;try{backups=validateSavedBackups(manifest.backupProjects,manifest.format);}catch{backups=undefined;}
+      const extras = [[manifest.project,backups?.length?`Download project (ZIP): Soundcraft session plus optional ${backupLabel(backups)} backup project${backups.length>1?"s":""} for Soundcraft testing`:"Download project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
+      let excerptDuration=NaN;
+      if(this.queue&&sourceExcerptAllowed){try{const source=await getSession(this.root,parts[2]!,manifest.guildID);excerptDuration=recordingSeconds(source);}catch{ /* Unknown length keeps Soundcraft disabled until a bounded excerpt is chosen. */ }}
+      const excerptScript=`${soundcraftChoiceScript}${backupChoiceScript}
+      function refreshSoundcraftExcerpt(){const start=Number(document.querySelector('#start').value),value=document.querySelector('#end').value,sourceEnd=${Number.isFinite(excerptDuration)?excerptDuration:"NaN"},baseStart=${Number(manifest.trim?.start??0)},baseEnd=${manifest.trim?.end===undefined?"sourceEnd":Number(manifest.trim.end)};const end=value===''?baseEnd:Number.isFinite(baseEnd)?Math.min(baseEnd,baseStart+Number(value)):baseStart+Number(value);updateSoundcraftChoice(end-baseStart-start);}
+      for(const id of ['start','end'])document.querySelector('#'+id).addEventListener('input',refreshSoundcraftExcerpt);refreshSoundcraftExcerpt();`;
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Witness — Downloads</title><style>body{font:18px system-ui;background:#101820;color:#edf2f7;max-width:680px;margin:70px auto;padding:24px}a{color:#9dd9ff}li{padding:12px}p{line-height:1.6}</style><h1>${escapeHTML(manifest.title??"The Witness")}</h1><p>Your ${escapeHTML(String(manifest.format).toUpperCase())} speaker tracks are ready. Choose a participant to download their audio.</p>${namesToggle}<p><a href="${escapeHTML(this.recordingLink(parts[2]!))}">Choose another format or mixdown speakers</a></p><p><a href="${route}${query}&amp;editor=1">Open multitrack editor</a></p><ul>${extras}${links}${rawLinks}</ul>${this.queue&&sourceExcerptAllowed?`<section><h2>Export an excerpt</h2><p>Times are in seconds from the beginning of these audio files. The original recording stays unchanged.</p><label>Start <input id="start" type="number" min="0" step="0.1" value="0"></label><label>End <input id="end" type="number" min="0" step="0.1"></label><select id="format">${["audition","audacity","soundcraft","ogg","wav","flac","mp3","aac"].map(value=>`<option value="${value}" ${value==="soundcraft"?'disabled aria-describedby="soundcraft-warning"':""}>${value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value==="soundcraft"?"Soundcraft session (ZIP)":value.toUpperCase()}</option>`).join("")}</select><p id="soundcraft-warning" role="status">Checking Soundcraft recording length…</p><p>${SOUNDCRAFT_RAM_NOTICE}</p>${backupChoiceHTML(backupMode(this.settings?.get(manifest.guildID)??{}))}<label><input id="mix" type="checkbox"> Include mixed audio</label><button id="edit">Prepare excerpt</button><p id="status" role="status"></p></section><script>${excerptScript}document.querySelector('#edit').onclick=async()=>{const status=document.querySelector('#status');try{const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:document.querySelector('#start').value,end:document.querySelector('#end').value,format:document.querySelector('#format').value,backupProjects:selectedBackupProjects(${JSON.stringify(backupMode(this.settings?.get(manifest.guildID)??{}))},document.querySelector('#format').value),mix:document.querySelector('#mix').checked})});const data=await response.json();if(!response.ok)throw Error(data.error);const link=document.createElement('a');link.href=data.url;link.textContent='Open excerpt status';status.replaceChildren(link);}catch(error){status.textContent=error.message;}};</script>`:this.queue?"<p>This export has timeline changes. Use the multitrack editor to make an excerpt from these files.</p>":""}<p>This private link expires at ${new Date(Number(expires)*1000).toISOString()}. Anyone you share it with can download these files.</p></html>`;
       this.html(response,html); return;
     }
-    if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && filename !== manifest.project && filename !== "session.sesx" && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename)&&!manifest.rawTracks?.some((track:any)=>track.file===filename))) return this.error(response,404,"Not found.");
+    if (!filePattern.test(filename) || (filename !== "manifest.json" && filename !== manifest.mix && filename !== manifest.notes && filename !== manifest.project && filename !== "session.sesx" && filename !== "session.scraft" && !manifest.transcripts?.includes(filename) && !manifest.tracks.some((track: any) => track.file === filename)&&!manifest.rawTracks?.some((track:any)=>track.file===filename))) return this.error(response,404,"Not found.");
     const file = await open(path.join(directory,filename),constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const info = await file.stat();

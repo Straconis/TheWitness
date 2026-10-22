@@ -2,7 +2,7 @@ import {readFile,readdir,stat,rm,lstat} from "node:fs/promises";
 import path from "node:path";
 import type {ExportJob} from "./jobs";
 import {resolveAudioFormat} from "./formats";
-import {getServerIntro} from "./server-intro";
+import {getServerIntro,introRecordingID,introInUse,withRecordingIntros,SERVER_INTROS_LOCK} from "./server-intro";
 import {sessionIDPattern} from "../storage/sessions";
 const exportName=/^export-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const EXPORT_RETENTION_MS=48*3600000,JOB_RETENTION_MS=7*86400000;
@@ -13,7 +13,7 @@ export async function estimateExportBytes(root:string,job:ExportJob):Promise<num
  let duration=Number.isFinite(elapsed)&&elapsed>0?elapsed:(Date.parse(metadata.endedAt)-Date.parse(metadata.startedAt))/1000;
  if(!Number.isFinite(duration)||duration<=0)duration=(metadata.durationHours??8)*3600;
  duration=Math.max(1,duration);
- const intro=job.introID?await getServerIntro(root,job.guildID,job.introID):undefined;
+ const intro=job.introID?await getServerIntro(root,job.guildID,job.introID,introRecordingID(job.introScope,job.sessionID),metadata.channelID):undefined;
  // FLAC uses a conservative compression estimate, not a hard size bound; the live guard is the backstop.
  const format=resolveAudioFormat(job.format,job.trackFormat),rate=format==="wav"?192000:format==="flac"?140000:40000;
  const spans=job.edits?job.edits.tracks.map(track=>Math.max(...track.clips.map(clip=>clip.at+clip.end-clip.start))+(intro?.seconds??0)):metadata.tracks.map(()=>Math.max(1,Math.min(duration,job.trimEnd??duration)-(job.trimStart??0))+(intro?.seconds??0));
@@ -21,7 +21,7 @@ export async function estimateExportBytes(root:string,job:ExportJob):Promise<num
  const maximum=Math.max(1,...spans);
  let output=spans.reduce((sum:number,seconds:number)=>sum+seconds*rate,0)+(job.mix?maximum*rate:0);
  if(job.includeRaw)output+=metadata.tracks.length*duration*140000;
- const project=["audition","audacity"].includes(job.format)||job.includeRaw;
+ const project=["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw;
  const corrected=job.sourceExport?0:metadata.tracks.length*duration*40000;
  const scratch=maximum*rate;
  // Corrected sources are removed before ZIP packaging; do not sum disjoint peaks.
@@ -62,17 +62,25 @@ export async function sweepArtifacts(root:string,active:ExportJob[],introIDs:Set
    else if(file.isFile()&&/\.(ogg|json)$/.test(file.name)){const id=file.name.slice(0,file.name.lastIndexOf("."));if(sessionIDPattern.test(id)&&!soundIDs.has(id)&&age>EXPORT_RETENTION_MS)await rm(target,{force:true});}
   }
  }
+ for(const entry of await directories(root)){const introRoot=path.join(root,entry.name,"intros");let scopes;try{scopes=await readdir(introRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")continue;throw error;}
+  // Same critical section as custom-intro uploads and export validation; in-use checks happen at deletion time.
+  if(sessionIDPattern.test(entry.name))await withRecordingIntros(entry.name,async()=>{
+  for(const scope of scopes)if(scope.isDirectory()&&/^[a-f0-9]{64}$/.test(scope.name)){const dir=path.join(introRoot,scope.name);for(const file of await readdir(dir,{withFileTypes:true})){const target=path.join(dir,file.name);let age:number;try{age=now-(await lstat(target)).mtimeMs;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")continue;throw error;}if(age<=EXPORT_RETENTION_MS)continue;if(file.isDirectory()&&/^upload-/.test(file.name)&&sessionIDPattern.test(file.name.slice(7)))await rm(target,{recursive:true,force:true});else if(file.isFile()&&/\.(json|pcm)$/.test(file.name)){const id=file.name.slice(0,file.name.lastIndexOf("."));if(sessionIDPattern.test(id)&&!introIDs.has(id)&&!introInUse(id)){await rm(path.join(dir,id+".json"),{force:true});await rm(path.join(dir,id+".pcm"),{force:true});}}}}
+  });
+ }
  const introRoot=path.join(root,"server-intros");let servers;try{servers=await readdir(introRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
+ await withRecordingIntros(SERVER_INTROS_LOCK,async()=>{
  for(const server of servers)if(server.isDirectory()&&/^[a-f0-9]{64}$/.test(server.name)){
   const dir=path.join(introRoot,server.name);let current:string|undefined;
   try{current=JSON.parse(await readFile(path.join(dir,"current.json"),"utf8")).id;}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")continue;}
   for(const file of await readdir(dir,{withFileTypes:true})){
    const target=path.join(dir,file.name);let age:number;try{age=now-(await lstat(target)).mtimeMs;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")continue;throw error;}
    if(file.isDirectory()&&file.name.startsWith("upload-")&&sessionIDPattern.test(file.name.slice(7))&&age>3600000)await rm(target,{recursive:true,force:true});
-   else if(file.isFile()&&file.name.endsWith(".json")&&sessionIDPattern.test(file.name.slice(0,-5))&&age>EXPORT_RETENTION_MS){const id=file.name.slice(0,-5);if(id!==current&&!introIDs.has(id)){await rm(path.join(dir,id+".pcm"),{force:true});await rm(target,{force:true});}}
-   else if(file.isFile()&&file.name.endsWith(".pcm")&&sessionIDPattern.test(file.name.slice(0,-4))&&age>EXPORT_RETENTION_MS){const id=file.name.slice(0,-4);if(id!==current&&!introIDs.has(id)){try{await lstat(path.join(dir,id+".json"));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;await rm(target,{force:true});}}}
+   else if(file.isFile()&&file.name.endsWith(".json")&&sessionIDPattern.test(file.name.slice(0,-5))&&age>EXPORT_RETENTION_MS){const id=file.name.slice(0,-5);if(id!==current&&!introIDs.has(id)&&!introInUse(id)){await rm(path.join(dir,id+".pcm"),{force:true});await rm(target,{force:true});}}
+   else if(file.isFile()&&file.name.endsWith(".pcm")&&sessionIDPattern.test(file.name.slice(0,-4))&&age>EXPORT_RETENTION_MS){const id=file.name.slice(0,-4);if(id!==current&&!introIDs.has(id)&&!introInUse(id)){try{await lstat(path.join(dir,id+".json"));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;await rm(target,{force:true});}}}
   }
  }
+ });
 }
 
 /** Release export pressure before deciding whether emergency recording stops are necessary. */

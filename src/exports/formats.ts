@@ -1,7 +1,7 @@
 import {UserError} from "../errors";
 export type ProjectTrackFormat="wav"|"flac";
 export function resolveAudioFormat(format:string,trackFormat?:string):"ogg"|"wav"|"flac"|"mp3"|"aac"{
- if(format==="audition"||format==="audacity"){
+ if(format==="audition"||format==="audacity"||format==="soundcraft"){
   if(trackFormat!==undefined&&trackFormat!=="wav"&&trackFormat!=="flac")throw new UserError("Project track format must be WAV or FLAC.");
   return trackFormat??(format==="audition"?"flac":"wav");
  }

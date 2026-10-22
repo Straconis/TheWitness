@@ -8,8 +8,10 @@ export async function writeProjectZip(directory:string,signal?:AbortSignal):Prom
  const output=await open(path.join(directory,"project.zip"),"wx");let offset=0n;const records:Buffer[]=[];
  async function write(bytes:Buffer){signal?.throwIfAborted();let position=0;while(position<bytes.length){const result=await output.write(bytes,position,bytes.length-position,null);if(!result.bytesWritten)throw new Error("ZIP storage made no progress.");position+=result.bytesWritten;}offset+=BigInt(bytes.length);}
  try{
-  let entries=(await readdir(directory)).filter(name=>/^(session\.(sesx|aup)|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(name)).sort();
-  if(entries.includes("session.aup")){entries=entries.filter(name=>!/^track-\d+\.(wav|flac)$/.test(name));entries.push(...(await readdir(path.join(directory,"session_data"))).filter(name=>/^track-\d+\.(wav|flac)$/.test(name)).map(name=>"session_data/"+name));}
+  let entries=(await readdir(directory)).filter(name=>/^(session\.(sesx|aup|scraft)|backup-audition\.sesx|backup-audacity\.aup|BACKUP-PROJECTS\.txt|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(name)).sort();
+  // Audacity projects read media from "<AUP name>_data"; that folder holds the only packaged copy, shared by every project in the ZIP.
+  const media=entries.includes("session.aup")?"session_data":entries.includes("backup-audacity.aup")?"backup-audacity_data":undefined;
+  if(media){entries=entries.filter(name=>!/^track-\d+\.(wav|flac)$/.test(name));entries.push(...(await readdir(path.join(directory,media))).filter(name=>/^track-\d+\.(wav|flac)$/.test(name)).sort().map(name=>media+"/"+name));}
   for(const entry of entries){const filename=path.join(directory,entry),size=(await stat(filename)).size,name=Buffer.from(entry);let value=0;
    for await(const chunk of createReadStream(filename)){signal?.throwIfAborted();value=crc32(chunk,value);}
    const start=offset,local=Buffer.alloc(30),extra=Buffer.alloc(20);local.writeUInt32LE(0x04034b50);local.writeUInt16LE(45,4);local.writeUInt16LE(0x21,12);local.writeUInt32LE(value,14);local.writeUInt32LE(0xffffffff,18);local.writeUInt32LE(0xffffffff,22);local.writeUInt16LE(name.length,26);local.writeUInt16LE(extra.length,28);extra.writeUInt16LE(1);extra.writeUInt16LE(16,2);extra.writeBigUInt64LE(BigInt(size),4);extra.writeBigUInt64LE(BigInt(size),12);

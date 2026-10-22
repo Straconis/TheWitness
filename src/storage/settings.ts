@@ -1,12 +1,14 @@
 import {validateStartSound} from "../exports/start-sound";
+import {validateBackupMode,SoundcraftBackupMode} from "../exports/soundcraft-backup";
 import { validateRecordingDuration } from "../recording/duration";
 import { validateSync,SyncSettings } from "../recording/sync";
 import { validateSchedule,RecordingSchedule } from "../automation/schedules";
 import { validateAccess } from "../discord/access";
 import { readFile, writeFile, rename } from "node:fs/promises";
-export interface GuildSettings { startSound?:{mode:"default"|"custom"|"off";customID?:string}; recordingDurationHours?:number; sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
+export interface GuildSettings { soundcraftBackup?:SoundcraftBackupMode; startSound?:{mode:"default"|"custom"|"off";customID?:string}; recordingDurationHours?:number; sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
 function validateEvents(settings:GuildSettings):void{
  validateStartSound(settings.startSound);
+ if(settings.soundcraftBackup!==undefined)validateBackupMode(settings.soundcraftBackup);
  if(settings.recordingDurationHours!==undefined)validateRecordingDuration(settings.recordingDurationHours);
  if(settings.sync!==undefined)validateSync(settings.sync);
  if(settings.retentionDays!==undefined&&(!Number.isInteger(settings.retentionDays)||settings.retentionDays<0||settings.retentionDays>3650))throw Error("Retention must be 0 (off) or 1–3650 days.");

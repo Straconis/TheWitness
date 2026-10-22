@@ -1,6 +1,8 @@
+import { transcriptionReadyAsync } from "./integrations/transcription-config";
+import { backupMode } from "./exports/soundcraft-backup";
 import {initializeStartSound} from "./exports/start-sound";
 import {cleanTransientArtifacts} from "./exports/storage";
-import {shutdownInOrder} from "./shutdown";
+import {shutdownInOrder,introShutdownStages} from "./shutdown";
 import { RetentionRunner } from "./automation/retention";
 import { ExportQueue } from "./exports/jobs";
 import { DownloadService } from "./downloads/service";
@@ -19,10 +21,13 @@ async function main(): Promise<void> {
   });
 
   await settingsStore.load();
+  // Probe whisper-cli in the background so pages and export checks read a cached answer instead of waiting for it.
+  void transcriptionReadyAsync();
   await initializeStartSound();
 
   await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
   const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>settings.startSound?.customID).filter((id):id is string=>!!id)));
+  exportQueue.setSoundcraftBackupPolicy(guildID=>backupMode(settingsStore.get(guildID)));
   setStorageExportQueue(exportQueue);
   // Cleanup may reclaim space needed to persist recovery metadata, before workers start.
   await exportQueue.load(false);
@@ -49,7 +54,8 @@ async function main(): Promise<void> {
       {name:"panels",close:()=>closePanels()},
       {name:"exports",close:()=>exportQueue.close()},
       {name:"Discord",close:()=>client.disconnect({reconnect:false})},
-      {name:"downloads",close:()=>downloads?.close()}
+      {name:"downloads",close:()=>downloads?.close()},
+      ...introShutdownStages(exportQueue)
     ],(name,error)=>{console.error(`[Shutdown] ${name}:`,error);process.exitCode=1;});
   };
   process.once("SIGINT", () => { void shutdown(); });

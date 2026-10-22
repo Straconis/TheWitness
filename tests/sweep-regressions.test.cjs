@@ -21,7 +21,7 @@ test('rejected final intro uploads remove their chunks and preserve the current 
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-intro-cleanup-'));
  try{const first=await uploadIntroChunk(root,'guild',{index:0,bytes:Buffer.from('bad format').toString('base64')});const dirs=await fs.readdir(path.join(root,'server-intros'));const dir=path.join(root,'server-intros',dirs[0]);const current=JSON.stringify({id:'11111111-1111-4111-8111-111111111111',name:'Existing intro',seconds:1});await fs.writeFile(path.join(dir,'current.json'),current);await assert.rejects(uploadIntroChunk(root,'guild',{id:first.id,index:1,bytes:Buffer.from('still bad').toString('base64'),final:true}),/Upload a WAV/);
  assert.equal(await fs.readFile(path.join(dir,'current.json'),'utf8'),current);assert.ok(!(await fs.readdir(dir)).some(name=>name.startsWith('upload-')));
- const missing=await uploadIntroChunk(root,'guild',{index:0,bytes:Buffer.from('another bad').toString('base64')});await assert.rejects(uploadIntroChunk(root,'guild',{id:missing.id,index:2,bytes:Buffer.from('last').toString('base64'),final:true}),/ENOENT/);assert.ok(!(await fs.readdir(dir)).some(name=>name.startsWith('upload-')));
+ const missing=await uploadIntroChunk(root,'guild',{index:0,bytes:Buffer.from('another bad').toString('base64')});await assert.rejects(uploadIntroChunk(root,'guild',{id:missing.id,index:2,bytes:Buffer.from('last').toString('base64'),final:true}),{code:'ENOENT',message:'Part of this intro upload is missing. Start the upload again.'});assert.ok(!(await fs.readdir(dir)).some(name=>name.startsWith('upload-')));
  }finally{await fs.rm(root,{recursive:true,force:true});}
 });
 

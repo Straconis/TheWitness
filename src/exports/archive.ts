@@ -9,7 +9,7 @@ export async function archiveExport(directory: string, limit: number): Promise<B
   const chunks: Buffer[] = [], central: Buffer[] = [];
   let offset = 0, count = 0, total = 22;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !/^(manifest\.json|notes\.json|session\.(sesx|aup)|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(entry.name)) continue;
+    if (!entry.isFile() || !/^(manifest\.json|notes\.json|session\.(sesx|aup|scraft)|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(entry.name)) continue;
     const name = Buffer.from(entry.name);
     const size = (await stat(path.join(directory, entry.name))).size;
     total += size + 30 + 46 + name.length * 2;

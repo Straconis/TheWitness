@@ -2,7 +2,7 @@ import {UserError} from "../errors";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 export const sessionIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export interface SavedSession { id: string; title?: string; guildID: string; channelID: string; channelName?: string; startedAt: string; state: string; tracks: Array<{ track: number; id: string; username: string }> }
+export interface SavedSession { durationSamples?:number; audioOrigin?:number; endedAt?:string; id: string; title?: string; guildID: string; channelID: string; channelName?: string; startedAt: string; state: string; tracks: Array<{ track: number; id: string; username: string }> }
 export async function getSession(root: string, id: string, guildID: string): Promise<SavedSession> {
   if (!sessionIDPattern.test(id)) throw new UserError("Invalid session ID.");
   const session = JSON.parse(await readFile(path.join(root, id, "session.json"), "utf8")) as SavedSession;

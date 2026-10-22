@@ -1,3 +1,4 @@
+import { backupMode,resolveBackupProjects,ASK_CHOICE_REQUIRED } from "../exports/soundcraft-backup";
 import {playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
 import {protectRecordingSpace} from "../exports/storage";
 import {UserError,commandErrorMessage} from "../errors";
@@ -87,8 +88,9 @@ async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild
       { type: 1, name: "recordings", description: "List the latest recordings in this server." },
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
-        { type: 3, name: "track_format", description: "Individual tracks for Audition or Audacity projects", choices: ["wav","flac"].map(value=>({name:value.toUpperCase(),value})) },
-        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value.toUpperCase(), value })) },
+        { type: 3, name: "track_format", description: "Individual tracks for project exports", choices: ["wav","flac"].map(value=>({name:value.toUpperCase(),value})) },
+        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","soundcraft","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value==="soundcraft"?"Soundcraft session (ZIP)":value.toUpperCase(), value })) },
+        { type: 3, name: "backup", description: "Soundcraft only: backup projects for Soundcraft testing", choices: [["audition","Adobe Audition"],["audacity","Audacity"],["both","Audition and Audacity"],["none","Neither"]].map(([value,name])=>({name,value})) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
         { type: 3, name: "upload", description: "Upload to your configured cloud account", choices:["dropbox","google","onedrive","box"].map(value=>({name:value,value})) }
@@ -215,6 +217,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     allowedMentions:{everyone:false,roles:false,users:false},
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
+
+  downloads?.setIntroChannels?.(guildID=>[...(client.guilds.get(guildID)?.channels.values()??[])].filter(channel=>channel.type===2).map(channel=>({id:channel.id,name:channel.name})));
 
   const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
   const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
@@ -494,10 +498,13 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         const trackFormat=options.find((option:any)=>option.name==="track_format")?.value;
         const sourceSession=await getSession(config.recordingPath, id, guildID);
         const mix = options.find((option: any) => option.name === "mix")?.value === true;
+        // Sent only when chosen; the server applies the admin setting and, for Ask, requires a choice for Soundcraft.
+        const backupChoice=options.find((option:any)=>option.name==="backup")?.value;
+        const backupProjects=backupChoice===undefined?undefined:backupChoice==="both"?["audition","audacity"]:backupChoice==="none"?[]:[backupChoice];
         if(downloads&&exportQueue){
           const transcribe=options.find((option:any)=>option.name==="transcribe")?.value===true;
           const upload=options.find((option:any)=>option.name==="upload")?.value;
-          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat});const position=exportQueue.position(job.id);
+          const job=await exportQueue.enqueue(id,guildID,format,mix,{transcribe,upload,trackFormat,backupProjects});const position=exportQueue.position(job.id);
           await interaction.editOriginalMessage({content:`Your export is queued. Job: ${job.id}${position?"\n"+queuePositionText(position,job.stage):""}\n[Open export status](${downloads.jobLink(job.id)})`});return;
         }
         if(options.find((option:any)=>option.name==="transcribe")?.value===true||options.find((option:any)=>option.name==="upload")?.value){
@@ -505,7 +512,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         }
         let directory:string;
         if (exportQueue) {
-          const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat });
+          const queued = await exportQueue.enqueue(id, guildID, format, mix, { trackFormat, backupProjects });
           await interaction.editOriginalMessage({content:`Your export is queued. Job: ${queued.id}. If the Discord reply expires, the files remain on the host; /exportjob can show the job status.`}).catch((error:unknown) => console.warn("[Export] Could not update reply:", error));
           const job = await awaitExport(exportQueue, queued.id, (position,stage) => interaction.editOriginalMessage({ content: `Job: ${queued.id}\n${position===undefined?"Your export is now processing.":queuePositionText(position,stage)}` }));
           if(!job){
@@ -524,7 +531,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           }
           if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
           directory = path.join(config.recordingPath, job.sessionID, job.directory);
-        } else directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat });
+        } else directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat, backupProjects: resolveBackupProjects(backupMode(settings), format, backupProjects) });
         if (downloads) {
           const link = downloads.link(id, path.basename(directory));
           await interaction.editOriginalMessage({ content: `Your speaker tracks are ready.\n[Open private downloads](${link})\nThis link expires in 24 hours. Share it only with your group.` });
@@ -536,7 +543,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
           ? "This export is too large to attach in Discord. It is saved on the host; enable the download service to retrieve large recordings."
-          : (error instanceof UserError ? commandErrorMessage(error) : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues.") });
+          : (error instanceof UserError ? commandErrorMessage(error)+(error.message.startsWith(ASK_CHOICE_REQUIRED)?" Add the backup: option to /export.":"") : "Could not export this recording. Choose a completed session from this server and check the bot logs if the problem continues.") });
       } finally { if (!exportQueue) exportJobs.delete(guildID); }
       return;
     }
