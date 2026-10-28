@@ -1,3 +1,4 @@
+import {defaultAudioTool} from "./speech-cleanup";
 import {createHash,randomUUID} from "node:crypto";
 import {mkdir,readFile,writeFile,rm,lstat,statfs} from "node:fs/promises";
 import path from "node:path";
@@ -59,7 +60,7 @@ export async function uploadStartSoundChunk(root:string,guild:string,data:any):P
   const chunks=[];let total=0;for(let index=0;index<=data.index;index++){const chunk=await readFile(path.join(upload,String(index)));total+=chunk.length;if(total>5*1024**2)throw Error("Start sounds must be no larger than 5 MB.");chunks.push(chunk);}
   const header=chunks[0];let demux:string;if(["RIFF","RF64"].includes(header.toString("ascii",0,4)))demux="wav";else if(header.toString("ascii",0,4)==="fLaC")demux="flac";else if(header.toString("ascii",0,4)==="OggS")demux="ogg";else if(header.toString("ascii",0,3)==="ID3"||(header[0]===255&&(header[1]&224)===224))demux="mp3";else throw Error("Upload WAV, FLAC, MP3 or Ogg audio.");
   const input=path.join(upload,"input"),output=path.join(upload,"sound.ogg");await writeFile(input,Buffer.concat(chunks),{mode:0o600});
-  const ffmpeg=process.env.FFMPEG_PATH?.trim()||(existsSync(path.resolve(__dirname,"../../bin/ffmpeg"))?path.resolve(__dirname,"../../bin/ffmpeg"):"ffmpeg");
+  const ffmpeg=defaultAudioTool();
   await runTool(ffmpeg,["-nostdin","-v","error","-n","-protocol_whitelist","file,pipe","-f",demux,"-i",input,"-vn","-t","10.01","-af","loudnorm=I=-20:TP=-3:LRA=11","-ar","48000","-ac","2","-c:a","libopus","-b:a","96k","-application","audio","-frame_duration","20","-f","ogg",output],undefined,60000);
   const seconds=await validateOggOpus(output),sound={id,name:typeof data.name==="string"?data.name.replace(/[\x00-\x1f\x7f]/g,"").slice(0,150):"Start sound",seconds};
   // Server-assigned IDs, and exclusive metadata/file creation keep snapshots immutable.

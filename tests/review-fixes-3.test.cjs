@@ -74,7 +74,7 @@ test('CLI exports resolve Soundcraft backups against the recording\'s Discord-se
   result=await cli(root,[id,'soundcraft']);assert.equal(result.code,1);assert.match(result.stderr,/--backup=/);
   for(const [choice,expected] of [['audition',['audition']],['audacity',['audacity']],['both',['audition','audacity']],['none',undefined]]){
    const {manifest,files}=await exported(await cli(root,[id,'soundcraft',`--backup=${choice}`]));assert.deepEqual(manifest.backupProjects,expected,choice);
-   assert.equal(files.includes('backup-audition.sesx'),!!expected?.includes('audition'),choice);assert.equal(files.includes('backup-audacity.aup'),!!expected?.includes('audacity'),choice);assert.ok(files.includes('session.scraft')&&files.includes('project.zip'));
+   assert.equal(files.includes('backup-audition.sesx'),!!expected?.includes('audition'),choice);assert.equal(files.includes('backup-audacity.aup3'),!!expected?.includes('audacity'),choice);assert.ok(files.includes('session.scraft')&&files.includes('project.zip'));
   }
   // Fixed modes apply without a choice and reject a contradicting one; the other server's setting is not used.
   await setMode('audacity');assert.deepEqual((await exported(await cli(root,[id,'soundcraft']))).manifest.backupProjects,['audacity']);

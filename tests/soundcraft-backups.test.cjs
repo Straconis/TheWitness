@@ -22,11 +22,10 @@ if 'backup-audition.sesx' in names:
  rel=[f.get('relativePath') for f in x.iter('file')]
  meta=x.find('.//xmpMetadata').text
  r['audition']={'paths':rel,'exists':all(os.path.isfile(os.path.join(out,p)) for p in rel),'tracks':[t.find('trackParameters/name').text for t in x.iter('audioTrack')],'ends':[int(c.get('endPoint')) for c in x.iter('audioClip')],'starts':[int(c.get('startPoint')) for c in x.iter('audioClip')],'markers':meta.count('<xmpDM:startTime>'),'marker_times':[int(v.split('</')[0]) for v in meta.split('<xmpDM:startTime>')[1:]]}
-if 'backup-audacity.aup' in names:
- x=ET.parse(os.path.join(out,'backup-audacity.aup')).getroot();ns='{http://audacity.sourceforge.net/xml/}'
- data=os.path.join(out,'backup-audacity_data')
- imports=[i.get('filename') for i in x.iter(ns+'import')]
- r['audacity']={'projname':x.get('projname'),'exists':all(os.path.isfile(os.path.join(data,f)) for f in imports),'imports':imports,'names':[i.get('name') for i in x.iter(ns+'import')],'offsets':[i.get('offset') for i in x.iter(ns+'import')],'labels':[[float(l.get('t')),l.get('title')] for l in x.iter(ns+'label')]}
+if 'backup-audacity.aup3' in names:
+ sys.path.insert(0,os.path.join(os.getcwd(),'tests/helpers'));from aup3 import native_project
+ c,x=native_project(os.path.join(out,'backup-audacity.aup3'));waves=x.findall('wavetrack')[::2]
+ r['audacity']={'names':[t.get('name') for t in waves],'offsets':[t.find('waveclip').get('offset') for t in waves],'labels':[[float(l.get('t')),l.get('title')] for l in x.findall('./labeltrack/label')]}
 if 'BACKUP-PROJECTS.txt' in names:r['readme']=open(os.path.join(out,'BACKUP-PROJECTS.txt')).read()
 print(json.dumps(r))`;
 function zip(file){const result=spawnSync('python3',['-I','-c',inspect,file],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);}
@@ -123,14 +122,14 @@ test('Soundcraft ZIPs include each selected backup project with shared, correctl
    const result=zip(path.join(output,'project.zip')),label=`${trackFormat} ${projects.join('+')||'none'}`;
    // One copy of each speaker/intro track, whatever the number of projects.
    assert.equal(result.audio.length,2,label);assert.ok(result.audio.every(name=>name.endsWith('.'+trackFormat)),label);
-   const media=projects.includes('audacity')?'backup-audacity_data/':'';
-   assert.deepEqual(result.scraft.paths,projects.includes('audacity')?[media+'Alice & _Bob_ _3.'+trackFormat,media+'Intro_ Theme.'+trackFormat]:[media+'track-1.'+trackFormat,media+'track-2.'+trackFormat],label);assert.ok(result.scraft.exists,label);
+   const media='';
+   assert.deepEqual(result.scraft.paths,['track-1.'+trackFormat,'track-2.'+trackFormat],label);assert.ok(result.scraft.exists,label);
    assert.deepEqual(result.scraft.frames,[introFrames+speechFrames,introFrames],label);assert.deepEqual(result.scraft.starts,[0,0]);
    assert.deepEqual(result.scraft.tracks,['Alice & "Bob" <3','Intro: Theme']);assert.equal(result.scraft.markers.length,1);assert.ok(Math.abs(result.scraft.markers[0][0]-0.6*48000)<=2,label);assert.equal(result.scraft.markers[0][1],'Ambush & <retreat>');const marker=result.scraft.markers[0][0];
-   assert.equal(result.names.includes('backup-audition.sesx'),projects.includes('audition'),label);assert.equal(result.names.includes('backup-audacity.aup'),projects.includes('audacity'),label);
+   assert.equal(result.names.includes('backup-audition.sesx'),projects.includes('audition'),label);assert.equal(result.names.includes('backup-audacity.aup3'),projects.includes('audacity'),label);
    assert.ok(!result.names.includes('session.sesx')&&!result.names.includes('session.aup'),label);
    if(projects.includes('audition')){const a=result.audition;assert.ok(a.exists,label);assert.deepEqual(a.paths,result.scraft.paths);assert.deepEqual(a.tracks,result.scraft.tracks);assert.deepEqual(a.starts,[0,0]);assert.deepEqual(a.ends,[introFrames+speechFrames,introFrames]);assert.deepEqual(a.marker_times,[marker]);}
-   if(projects.includes('audacity')){const a=result.audacity;assert.equal(a.projname,'backup-audacity_data');assert.ok(a.exists,label);assert.deepEqual(a.imports,['Alice & _Bob_ _3.'+trackFormat,'Intro_ Theme.'+trackFormat]);assert.deepEqual(a.names,result.scraft.tracks);assert.deepEqual(a.offsets,['0','0']);assert.equal(a.labels.length,1);assert.ok(Math.abs(a.labels[0][0]*48000-marker)<=1);assert.equal(a.labels[0][1],'Ambush & <retreat>');}
+   if(projects.includes('audacity')){const a=result.audacity;assert.deepEqual(a.names,result.scraft.tracks);assert.deepEqual(a.offsets,['0','0']);assert.equal(a.labels.length,1);assert.ok(Math.abs(a.labels[0][0]*48000-marker)<=1);assert.equal(a.labels[0][1],'Ambush & <retreat>');}
    if(projects.length){assert.match(result.readme,/optional backup projects for Soundcraft testing/);assert.match(result.readme,/Open session\.scraft in Soundcraft first/);}else assert.equal(result.readme,undefined);
   }
   // Editor exports keep the rendered edits, renamed tracks and moved notes in every backup project.
@@ -142,8 +141,8 @@ test('Soundcraft ZIPs include each selected backup project with shared, correctl
   // Standalone project exports are unchanged.
   const audacity=await exportSession(root,session.id,{format:'audacity'}),audition=await exportSession(root,session.id,{format:'audition'});
   const list=file=>JSON.parse(spawnSync('python3',['-I','-c','import zipfile,sys,json;print(json.dumps(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))',file],{encoding:'utf8'}).stdout);
-  const aup=list(path.join(audacity,'project.zip'));assert.ok(aup.includes('session.aup')&&aup.includes('session_data/Alice & _Bob_ _3.wav')&&!aup.includes('track-1.wav')&&!aup.some(name=>name.startsWith('backup')));
-  assert.match(await readFile(path.join(audacity,'session.aup'),'utf8'),/projname="session_data"/);
+  const aup=list(path.join(audacity,'project.zip'));assert.ok(aup.includes('session.aup3')&&!aup.some(n=>n.endsWith('.wav'))&&!aup.includes('track-1.wav')&&!aup.some(name=>name.startsWith('backup')));
+  assert.equal((await readFile(path.join(audacity,'session.aup3'))).subarray(0,15).toString(),'SQLite format 3');
   const sesx=list(path.join(audition,'project.zip'));assert.ok(sesx.includes('session.sesx')&&sesx.includes('track-1.flac')&&!sesx.some(name=>name.startsWith('backup')));
   assert.match(await readFile(path.join(audition,'session.sesx'),'utf8'),/relativePath="track-1\.flac"/);
  }finally{await rm(root,{recursive:true,force:true});}

@@ -89,7 +89,7 @@ async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild
       { type: 1, name: "export", description: "Download a completed recording as separate speaker tracks.", options: [
         { type: 3, name: "session", description: "Session ID from /recordings", required: true },
         { type: 3, name: "track_format", description: "Individual tracks for project exports", choices: ["wav","flac"].map(value=>({name:value.toUpperCase(),value})) },
-        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","soundcraft","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity import project (ZIP)":value==="soundcraft"?"Soundcraft session (ZIP)":value.toUpperCase(), value })) },
+        { type: 3, name: "format", description: "Project or audio format", choices: ["audition","audacity","soundcraft","ogg","wav","flac","mp3","aac"].map(value => ({ name: value==="audition"?"Adobe Audition project (ZIP)":value==="audacity"?"Audacity project (.aup3 in ZIP)":value==="soundcraft"?"Soundcraft session (ZIP)":value.toUpperCase(), value })) },
         { type: 3, name: "backup", description: "Soundcraft only: backup projects for Soundcraft testing", choices: [["audition","Adobe Audition"],["audacity","Audacity"],["both","Audition and Audacity"],["none","Neither"]].map(([value,name])=>({name,value})) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },

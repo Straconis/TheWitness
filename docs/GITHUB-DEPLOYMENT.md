@@ -20,7 +20,7 @@ GitHub repository secrets:
   `/opt/the-witness/scripts/deploy-github.sh` with SSH forwarding and PTYs disabled.
 - `WITNESS_VPS_KNOWN_HOSTS`: verified VPS SSH host keys.
 
-The VPS uses its existing FFmpeg, whisper executable and models. Releases contain
+The audio binary is packaged as `bin/ffmpeg-portable` so the existing installer can create its legacy `bin/ffmpeg` link without a collision during the first upgrade. Runtime resolution prefers the portable binary unless FFMPEG_PATH explicitly overrides it. New releases include a checksum-source-built, tested portable FFmpeg for the audio cleanup filters. The VPS keeps its existing whisper executable and models. Explicit custom FFMPEG_PATH overrides remain supported; cleanup is disabled if that tool lacks the required filters. Releases contain
 compiled code and production dependencies, stored under `/opt/the-witness/.releases`.
 The deployed `dist` and `node_modules` point to the current release. `.env`,
 recordings, private-link keys, server settings and audio models stay in place.

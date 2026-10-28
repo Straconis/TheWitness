@@ -20,13 +20,14 @@ PKG_CONFIG_PATH="$TASK_PREFIX/lib/pkgconfig" ./configure --prefix="$TASK_PREFIX"
  --disable-x86asm --enable-small --pkg-config-flags=--static \
  --extra-cflags="-I$TASK_PREFIX/include" --extra-ldflags="-L$TASK_PREFIX/lib -static" \
  --enable-protocol=file,pipe --enable-demuxer=ogg,wav,flac,mp3,mov,aac,pcm_s16le \
- --enable-muxer=ogg,wav,flac,mp3,mp4,adts,pcm_s16le,null \
- --enable-decoder=opus,pcm_s16le,flac,mp3,mp3float,aac \
- --enable-encoder=libopus,pcm_s16le,flac,libmp3lame,aac \
+ --enable-muxer=ogg,wav,flac,mp3,mp4,adts,pcm_s16le,pcm_f32le,null \
+ --enable-decoder=opus,pcm_s16le,pcm_f32le,flac,mp3,mp3float,aac \
+ --enable-encoder=libopus,pcm_s16le,pcm_f32le,flac,libmp3lame,aac \
  --enable-parser=opus,flac,mpegaudio,aac --enable-libopus --enable-libmp3lame \
- --enable-filter=aresample,amix,anull,atrim,asetpts,adelay,volume,pan,afade,apad,asplit,loudnorm \
+ --enable-filter=aresample,amix,anull,atrim,asetpts,adelay,volume,pan,afade,apad,asplit,loudnorm,highpass,equalizer,afftdn,alimiter \
  > "$TASK_ROOT/work/portable/ffmpeg-configure.log" 2>&1
 make -j2 > "$TASK_ROOT/work/portable/ffmpeg-build.log" 2>&1
-cp ffmpeg "$TASK_ROOT/bin/ffmpeg"
+cp ffmpeg "$TASK_ROOT/bin/ffmpeg.new"
+mv "$TASK_ROOT/bin/ffmpeg.new" "$TASK_ROOT/bin/ffmpeg"
 cc -static -O2 -o "$TASK_ROOT/bin/oggcorrect" "$TASK_ROOT/cook/oggcorrect.c"
 printf '%s\n' 'Portable FFmpeg and Craig correction tool built.'

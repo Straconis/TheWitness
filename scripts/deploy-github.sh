@@ -30,9 +30,16 @@ PY
 rm -f "$archive"
 test -f "$release/dist/index.js"
 test -d "$release/node_modules"
-# Reuse VPS-specific audio executables/models, rather than replacing them with CI tools.
+# Use a tested portable FFmpeg when packaged; retain compatibility with older source-only releases.
 test -x "$release/bin/oggcorrect"
-for tool in ffmpeg whisper-cli models; do ln -s "$app/bin/$tool" "$release/bin/$tool"; done
+bundled_audio=false
+if [[ -x "$release/bin/ffmpeg-portable" ]]; then
+ bundled_audio=true
+ ln -s ffmpeg-portable "$release/bin/ffmpeg"
+elif [[ -x "$release/bin/ffmpeg" ]]; then bundled_audio=true
+else ln -s "$app/bin/ffmpeg" "$release/bin/ffmpeg"
+fi
+for tool in whisper-cli models; do ln -s "$app/bin/$tool" "$release/bin/$tool"; done
 cd "$release"
 node - <<'JS'
 if (Number(process.versions.node.split('.')[0]) !== 24) throw Error('Node 24 required');
@@ -55,10 +62,20 @@ const {downloadName}=require('./dist/downloads/names');
 if(downloadName('project.zip',{startedAt:'2026-10-01T12:00:00Z'},'date')!=='2026-10-01.zip')throw Error('ZIP naming smoke check failed');
 JS
 cd "$app"
-# The source-only deploy shares the existing host audio tool; refuse an incompatible upgrade.
-if ! "$app/bin/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qw loudnorm; then
-  echo "Host FFmpeg lacks loudnorm. Rebuild/install the bundled audio tool before deploying this version." >&2
+# Verify the selected release tool before touching the running service. Host-owned models stay shared.
+required_filters=(loudnorm)
+if [[ "$bundled_audio" == true ]]; then required_filters+=(highpass equalizer afftdn alimiter); fi
+for filter in "${required_filters[@]}"; do
+ if ! "$release/bin/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qw "$filter"; then
+  echo "Release FFmpeg lacks required filter: $filter" >&2
   exit 1
+ fi
+done
+if [[ "$bundled_audio" == true ]]; then
+ if ! "$release/bin/ffmpeg" -hide_banner -muxers 2>/dev/null | grep -qw f32le; then
+  echo 'Release FFmpeg lacks native-project float PCM output.' >&2
+  exit 1
+ fi
 fi
 # Verify permission before touching the running release.
 sudo -n -l /usr/bin/systemctl restart "$service" >/dev/null

@@ -19,17 +19,18 @@ jobs:
           node-version: '24'
           cache: npm
       - name: Install build and audio tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config ffmpeg
       - run: npm ci
       - name: Build and test
         run: |
-          mkdir -p bin
-          ln -s /usr/bin/ffmpeg bin/ffmpeg
+          python3 scripts/prepare-audio-sources.py
+          sh scripts/build-portable-audio.sh
           npm test
       - name: Package release
         run: |
+          cp bin/ffmpeg bin/ffmpeg-portable
           npm prune --omit=dev
-          tar -czf /tmp/witness-release.tar.gz dist node_modules bin/oggcorrect package.json package-lock.json src scripts cook licenses LICENSE README.md docs assets
+          tar -czf /tmp/witness-release.tar.gz dist node_modules bin/oggcorrect bin/ffmpeg-portable package.json package-lock.json src scripts cook licenses LICENSE README.md docs assets
       - name: Deploy tested release over SSH
         env:
           VPS_KEY: ${{ secrets.WITNESS_VPS_SSH_KEY }}

@@ -1,0 +1,25 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),{execFileSync}=require('node:child_process');
+const {cleanSpeech,speechCleanupAvailable}=require('../dist/exports/speech-cleanup');
+const ffmpeg=path.resolve(__dirname,'../bin/ffmpeg');
+function wav(n,sample){const b=Buffer.alloc(44+n*4);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(2,22);b.writeUInt32LE(48000,24);b.writeUInt32LE(192000,28);b.writeUInt16LE(4,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(n*4,40);for(let i=0;i<n;i++){const v=sample(i);b.writeInt16LE(v,44+i*4);b.writeInt16LE(v,46+i*4);}return b;}
+const decode=file=>execFileSync(ffmpeg,['-v','error','-i',file,'-f','s16le','pipe:1'],{maxBuffer:10*1024**2});
+const rms=(b,start,end)=>{let sum=0;for(let n=start;n<end;n++)sum+=b.readInt16LE(n*4)**2;return Math.sqrt(sum/(end-start));};
+test('speech cleanup compensates filter latency, preserves exact lengths and retains late audio',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-cleanup-sync-'));
+ try{assert.equal(await speechCleanupAvailable(ffmpeg),true);const frames=96123,file=path.join(root,'speech.wav');await fs.writeFile(file,wav(frames,n=>n===48000?20000:n===frames-200?10000:0));await cleanSpeech(file,'pcm_s16le',ffmpeg);const out=decode(file);assert.equal(out.length,frames*4);
+ const peak=(start,end)=>{let best=start;for(let n=start;n<end;n++)if(Math.abs(out.readInt16LE(n*4))>Math.abs(out.readInt16LE(best*4)))best=n;return best;};assert.equal(peak(47000,49000),48000);assert.equal(peak(frames-1000,frames),frames-200);
+ }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+test('gentle cleanup reduces quiet rumble/noise while retaining voice energy and avoiding clipping',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-cleanup-noise-'));
+ try{let seed=42;const frames=4*48000,file=path.join(root,'speech.wav');await fs.writeFile(file,wav(frames,n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;const noise=(seed/2**32-.5)*400,rumble=1500*Math.sin(2*Math.PI*35*n/48000),voice=n>=48000&&n<3*48000?5000*Math.sin(2*Math.PI*440*n/48000)+1000*Math.sin(2*Math.PI*3000*n/48000):0;return Math.round(noise+rumble+voice);}));const before=decode(file);await cleanSpeech(file,'pcm_s16le',ffmpeg);const after=decode(file);assert.equal(after.length,before.length);assert.ok(rms(after,24000,47000)<rms(before,24000,47000)*.7);assert.ok(rms(after,72000,120000)>rms(before,72000,120000)*.4);let peak=0;for(let n=0;n<frames;n++)peak=Math.max(peak,Math.abs(after.readInt16LE(n*4)));assert.ok(peak<32767);
+ }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+test('cleanup changes processed voices without changing raw originals, sync cues or source recordings',async()=>{
+ const {RecordingSession}=require('../dist/recording/session'),{OpusEncoder}=require('@discordjs/opus'),{exportSession}=require('../dist/exports/export'),{ExportQueue}=require('../dist/exports/jobs');
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-cleanup-export-'));let queue;
+ try{const session=await RecordingSession.create(root,'guild','voice'),encoder=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840);for(let n=0;n<960;n++){const v=Math.round(3000*Math.sin(2*Math.PI*440*n/48000)+1000*Math.sin(2*Math.PI*35*n/48000));pcm.writeInt16LE(v,n*4);pcm.writeInt16LE(v,n*4+2);}for(let f=0;f<30;f++){await session.append(encoder.encode(pcm),'speaker','Voice',f*960,BigInt(f*960+1),pcm);await session.append(encoder.encode(pcm),'witness-sync','Sync cues',f*960,BigInt(f*960+1),pcm);}await session.close();const original=await fs.readFile(path.join(session.directory,'audio.ogg.data'));
+ const base=await exportSession(root,session.id,{format:'wav'}),clean=await exportSession(root,session.id,{format:'wav',cleanupAudio:true,includeRaw:true});assert.notDeepEqual(decode(path.join(clean,'track-1.wav')),decode(path.join(base,'track-1.wav')));assert.deepEqual(decode(path.join(clean,'raw-track-1.flac')),decode(path.join(base,'track-1.wav')));assert.deepEqual(decode(path.join(clean,'track-2.wav')),decode(path.join(base,'track-2.wav')));assert.deepEqual(await fs.readFile(path.join(session.directory,'audio.ogg.data')),original);assert.equal(JSON.parse(await fs.readFile(path.join(clean,'manifest.json'))).cleanupAudio,true);
+ queue=new ExportQueue(root);await queue.load(false);const a=await queue.enqueue(session.id,'guild','wav',false,{cleanupAudio:true}),b=await queue.enqueue(session.id,'guild','wav',false,{cleanupAudio:false});assert.notEqual(a.id,b.id);await queue.cancel(a.id,'guild');const retry=await queue.retry(a.id,'guild');assert.equal(retry.cleanupAudio,true);await assert.rejects(queue.enqueue(session.id,'guild','wav',false,{cleanupAudio:'yes'}),/Invalid speech cleanup/);
+ }finally{await queue?.close();queue?.releaseIntroReferences();await fs.rm(root,{recursive:true,force:true});}
+});

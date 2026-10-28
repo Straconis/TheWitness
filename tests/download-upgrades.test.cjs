@@ -3,17 +3,6 @@ const fs=require('node:fs/promises'),os=require('node:os'),path=require('node:pa
 const {writeAudacity}=require('../dist/exports/audacity');
 const {downloadName}=require('../dist/downloads/names');
 const {RecordingSession}=require('../dist/recording/session');
-test('Audacity automatically imports uniquely speaker-named media containing the full source bytes',async()=>{
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-named-aup-'));
- try{const tracks=[{file:'track-1.wav',username:'Alice'},{file:'track-2.wav',username:'Alice'},{file:'track-3.wav',username:'../Bob'}];
- for(const t of tracks)await fs.writeFile(path.join(root,t.file),'audio '+t.file);
- const named=await writeAudacity(root,tracks,[{seconds:1,text:'Note'}]);
- assert.deepEqual(named.map(t=>t.file),['Alice.wav','Alice (2).wav','.._Bob.wav']);
- const project=await fs.readFile(path.join(root,'session.aup'),'utf8');
- for(let i=0;i<tracks.length;i++){assert.ok(project.includes(`filename="${named[i].file}"`));assert.deepEqual(await fs.readFile(path.join(root,'session_data',named[i].file)),await fs.readFile(path.join(root,tracks[i].file)));}
- assert.ok(project.includes('Recording notes'));
- }finally{await fs.rm(root,{recursive:true,force:true});}
-});
 test('recording date, server and room determine ZIP names regardless of current date',()=>{
  const m={startedAt:'2026-10-27T17:00:00-04:00',guildName:'My Server',channelName:'General Voice'};
  assert.equal(downloadName('project.zip',m,'date'),'2026-10-27-My-Server-General-Voice.zip');

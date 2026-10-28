@@ -1,3 +1,4 @@
+import {defaultAudioTool} from "./speech-cleanup";
 import {createHash,randomUUID} from "node:crypto";
 import {mkdir,readFile,writeFile,rename,stat,rm,statfs,readdir} from "node:fs/promises";
 import path from "node:path";
@@ -96,6 +97,6 @@ async function uploadIntroChunkNow(root:string,guild:string,data:any,recordingID
  const chunks=[];let size=0;for(let index=0;index<=data.index;index++){const chunk=await readFile(path.join(upload,String(index))).catch(error=>{throw (error as NodeJS.ErrnoException).code==="ENOENT"?Object.assign(Error("Part of this intro upload is missing. Start the upload again."),{code:"ENOENT"}):error;});size+=chunk.length;if(size>30*1024*1024)throw Error("Intro files must be under 30 MB.");chunks.push(chunk);}
  const header=chunks[0];let demux:string;if(header.toString("ascii",0,4)==="RIFF"||header.toString("ascii",0,4)==="RF64")demux="wav";else if(header.toString("ascii",0,4)==="fLaC")demux="flac";else if(header.toString("ascii",0,4)==="OggS")demux="ogg";else if(header.toString("ascii",0,3)==="ID3"||(header[0]===255&&(header[1]&224)===224))demux="mp3";else throw Error("Upload a WAV, FLAC, MP3, or Ogg audio intro.");
  const input=path.join(upload,"input"),pcm=path.join(upload,"intro.pcm");await writeFile(input,Buffer.concat(chunks));
- const ffmpeg=process.env.FFMPEG_PATH?.trim()||(existsSync(path.resolve(__dirname,"../../bin/ffmpeg"))?path.resolve(__dirname,"../../bin/ffmpeg"):"ffmpeg");
+ const ffmpeg=defaultAudioTool();
  await runTool(ffmpeg,["-nostdin","-v","error","-n","-protocol_whitelist","file,pipe","-f",demux,"-i",input,"-vn","-t","300.01","-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le",pcm],undefined,120000);const seconds=(await stat(pcm)).size/192000;if(seconds<=0||seconds>300)throw Error("Intro must contain audio and be no longer than five minutes.");const intro={id,...(channelID?{channelID}:{}),name:typeof data.name==="string"?data.name.slice(0,150):"Server intro",seconds};await rename(pcm,introPCM(root,guild,id,recordingID,channelID));await writeFile(path.join(dir,id+".json"),JSON.stringify(intro),{flag:"wx",mode:0o600});if(!recordingID){const temporary=path.join(dir,"current-"+id+".tmp");await writeFile(temporary,JSON.stringify(intro),{mode:0o600});await rename(temporary,path.join(dir,"current.json"));}if(recordingID)await withRecordingIntros(recordingID,()=>pruneCustomIntros(dir,new Set([id,...(options.keep??[])])));return {id,intro};}finally{introWaiting--;release();await rm(upload,{recursive:true,force:true});}
 }

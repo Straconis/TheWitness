@@ -3,7 +3,6 @@ import path from "node:path";
 import {UserError} from "../errors";
 import {writeSoundcraft} from "./soundcraft";
 import {writeAudition} from "./audition";
-import {link} from "node:fs/promises";
 import {writeAudacity} from "./audacity";
 
 /** Per-server admin choice for fallback projects packaged with Soundcraft exports while Soundcraft support is tested. */
@@ -11,8 +10,8 @@ export type SoundcraftBackupMode="audition"|"audacity"|"both"|"ask"|"none";
 export type BackupProject="audition"|"audacity";
 export const SOUNDCRAFT_BACKUP_MODES:readonly SoundcraftBackupMode[]=["audition","audacity","both","ask","none"];
 export const DEFAULT_SOUNDCRAFT_BACKUP:SoundcraftBackupMode="ask";
-// Audacity resolves <import> filenames inside "<project name>_data", so the shared media folder follows the AUP name.
-export const AUDACITY_BACKUP_PROJECT="backup-audacity.aup",AUDACITY_BACKUP_MEDIA="backup-audacity_data",AUDITION_BACKUP_PROJECT="backup-audition.sesx",BACKUP_README="BACKUP-PROJECTS.txt";
+// Native Audacity backups embed audio; the other project formats reference the root media.
+export const AUDACITY_BACKUP_PROJECT="backup-audacity.aup3",AUDACITY_BACKUP_MEDIA="backup-audacity_data",AUDITION_BACKUP_PROJECT="backup-audition.sesx",BACKUP_README="BACKUP-PROJECTS.txt";
 const order:BackupProject[]=["audition","audacity"];
 const STALE_PAGE_HINT=" If a download page was open before a server manager changed this setting, reload it.";
 /** Prefix of the Ask-without-choice error; Discord and the CLI add how to choose there. */
@@ -52,22 +51,17 @@ export function validateSavedBackups(value:unknown,format:string):BackupProject[
  return parseBackups(value);
 }
 
-/** Writes session.scraft plus any selected backup projects; every project references one shared copy of each track. */
-export async function writeSoundcraftProject(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>,title:string|undefined,backups:BackupProject[]=[]):Promise<void>{
+/** Writes session.scraft plus any selected backup projects; Audacity embeds audio, while Soundcraft and Audition reference shared media. */
+export async function writeSoundcraftProject(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>,title:string|undefined,backups:BackupProject[]=[],options:Parameters<typeof writeAudacity>[3]={}):Promise<void>{
  const projects=validateSavedBackups(backups,"soundcraft")!;
- let media="",projectTracks=tracks;
- if(projects.includes("audacity")){
-  projectTracks=await writeAudacity(directory,tracks,notes,{project:path.basename(AUDACITY_BACKUP_PROJECT,".aup")});media=AUDACITY_BACKUP_MEDIA+"/";
-  // Project writers inspect media at the root; aliases are hard links and only the nested copy is packaged.
-  for(let i=0;i<tracks.length;i++)if(projectTracks[i].file!==tracks[i].file)await link(path.join(directory,tracks[i].file),path.join(directory,projectTracks[i].file));
- }
- await writeSoundcraft(directory,projectTracks,notes,title,media);
- if(projects.includes("audition"))await writeAudition(directory,projectTracks,notes,title,{filename:AUDITION_BACKUP_PROJECT,media});
+ if(projects.includes("audacity"))await writeAudacity(directory,tracks,notes,{...options,project:"backup-audacity"});
+ await writeSoundcraft(directory,tracks,notes,title);
+ if(projects.includes("audition"))await writeAudition(directory,tracks,notes,title,{filename:AUDITION_BACKUP_PROJECT});
  if(!projects.length)return;
  const lines=["The Witness: optional backup projects for Soundcraft testing","",
   "Open session.scraft in Soundcraft first. These backup projects are included only as a fallback while Soundcraft support is being tested.",""];
  if(projects.includes("audition"))lines.push(`- ${AUDITION_BACKUP_PROJECT}: Adobe Audition backup project.`);
- if(projects.includes("audacity"))lines.push(`- ${AUDACITY_BACKUP_PROJECT}: Audacity backup project. Audacity imports it, then asks you to save a native .aup3 project.`);
- lines.push("",`All projects share the same speaker audio${media?` in ${AUDACITY_BACKUP_MEDIA}/`:""}. Extract the whole ZIP and keep the folder layout so each project can find its media.`);
+ if(projects.includes("audacity"))lines.push(`- ${AUDACITY_BACKUP_PROJECT}: Native Audacity project with embedded audio; open it directly.`);
+ lines.push("","Audacity projects contain their own audio. Soundcraft and Audition share the separate speaker files. Extract the whole ZIP and keep its folder layout.");
  await writeFile(path.join(directory,BACKUP_README),lines.join("\r\n")+"\r\n");
 }
