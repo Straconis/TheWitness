@@ -11,3 +11,15 @@ test('silence duration is configurable and rejects invalid limits',async()=>{con
 test('a caller cannot overwrite an intro snapshot by reusing its ID for a new upload',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-intro-immutable-'));try{const first=await uploadIntroChunk(root,'guild',{index:0,bytes:wav(.2).toString('base64'),final:true,name:'Original'});const {introPCM}=require('../dist/exports/server-intro'),file=introPCM(root,'guild',first.id),before=await readFile(file);await assert.rejects(uploadIntroChunk(root,'guild',{id:first.id,index:0,bytes:wav(.3).toString('base64'),final:true,name:'Replacement'}));const after=await readFile(file);assert.equal(after.length,before.length,'A rejected upload must not overwrite the selected intro PCM');assert.deepEqual(after,before);assert.equal((await getServerIntro(root,'guild',first.id)).name,'Original');}finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('intro matching stays balanced in both the project and mix when another speaker track is silent',async()=>{
+ const {RecordingSession}=require('../dist/recording/session'),{OpusEncoder}=require('@discordjs/opus'),{exportSession}=require('../dist/exports/export'),{measureLevel}=require('../dist/exports/normalization');
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-multiple-intro-'));
+ try{const intro=await uploadIntroChunk(root,'guild',{index:0,bytes:wav(2).toString('base64'),final:true,name:'Intro.wav'}),session=await RecordingSession.create(root,'guild','voice'),voice=new OpusEncoder(48000,2),silent=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840),zero=Buffer.alloc(3840);
+ for(let sample=0;sample<960;sample++){const value=Math.round(1000*Math.sin(sample*2*Math.PI*440/48000));pcm.writeInt16LE(value,sample*4);pcm.writeInt16LE(value,sample*4+2);}
+ for(let n=0;n<150;n++){await session.append(voice.encode(pcm),'one','Speaking',n*960,BigInt(n*960+1),pcm);await session.append(silent.encode(zero),'two','Silent',n*960,BigInt(n*960+1),zero);}await session.close();
+ const dir=await exportSession(root,session.id,{format:'audition',trackFormat:'wav',mix:true,normalizeAudio:true,normalizeIntro:true,introID:intro.id});
+ const speaker=await measureLevel(path.join(dir,'track-1.wav'),ffmpeg),theme=await measureLevel(path.join(dir,'track-3.wav'),ffmpeg),mixed=await measureLevel(path.join(dir,'mix.wav'),ffmpeg);
+ assert.ok(Math.abs(speaker.lufs-theme.lufs)<1,`Project intro ${theme.lufs} LUFS versus speech ${speaker.lufs} LUFS`);assert.ok(Math.abs(mixed.lufs+16)<1);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

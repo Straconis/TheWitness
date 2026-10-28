@@ -1,7 +1,8 @@
-import {assertSoundcraftLength,soundcraftExportSeconds} from "./soundcraft-limits";
+import {checkExportSpace,exportProgressReporter} from "./workspace";
+import {assertSoundcraftLength,soundcraftExportSeconds,recordingSeconds} from "./soundcraft-limits";
 import {writeSoundcraftProject,BackupProject,validateSavedBackups} from "./soundcraft-backup";
 import { deprioritize,processClosed } from "./process";
-import {measureLevel,normalizationGain,applyGain,AudioLevel,matchLoudness,LoudnessMatch,resolveLoudness} from "./normalization";
+import {measureLevel,normalizationGain,AudioLevel,matchLoudness,LoudnessMatch,resolveLoudness} from "./normalization";
 import {findSilenceCuts,cutSharedSilence,shiftedTime,SilenceCut,silenceSeconds} from "./silence";
 import {getServerIntro,introPCM,introRecordingID,IntroScope} from "./server-intro";
 import {validateMixExclusions} from "./mix-selection";
@@ -14,7 +15,7 @@ import { writeAudition } from "./audition";
 import { writeProjectZip } from "./project-zip";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile, link } from "node:fs/promises";
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -22,10 +23,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export type ExportFormat = "ogg" | "wav" | "flac" | "mp3" | "aac" | "audition" | "audacity" | "soundcraft";
-export interface ExportOptions { format?: ExportFormat; trackFormat?:ProjectTrackFormat; targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean; introID?:string; introScope?:IntroScope; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string; backupProjects?:BackupProject[] }
+export interface ExportOptions { onProgress?:(stage:string,totalSeconds?:number)=>void; format?: ExportFormat; trackFormat?:ProjectTrackFormat; targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean; normalizeIntro?:boolean; trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean; introID?:string; introScope?:IntroScope; mix?: boolean; excludeFromMix?:number[]; trimStart?: number; trimEnd?: number; correctorPath?: string; ffmpegPath?: string; signal?:AbortSignal; edits?:AudioEdits; sourceExport?:string; backupProjects?:BackupProject[] }
 
 /** Feed Craig's two-pass correction without loading an entire recording into memory. */
 async function correct(directory: string, track: number, target: string, executable: string,signal?:AbortSignal): Promise<void> {
+  await checkExportSpace();
   const child = spawn(executable, [String(track)], { stdio: ["pipe", "pipe", "pipe"],signal,killSignal:"SIGKILL" });
   deprioritize(child);
   const closed=processClosed(child);
@@ -84,15 +86,18 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     if(options.edits)validateEdits(options.edits,metadata.tracks.map((track:any)=>track.track));
     const intro=options.introID?await getServerIntro(root,metadata.guildID,options.introID,introRecordingID(options.introScope,sessionID),metadata.channelID):undefined;if(options.introID&&!intro)throw Error("Saved intro not found.");
     if(requestedFormat==="soundcraft"){if(options.edits)validateEdits(options.edits);assertSoundcraftLength(soundcraftExportSeconds(metadata,options,intro?.seconds??0));}
+    const sourceSeconds=recordingSeconds(metadata),clipSeconds=Math.max(0,Math.min(sourceSeconds,end??sourceSeconds)-start);
     const rawTracks:Array<{file:string;userID:string;username:string}>=[];
     const manifest: Array<{ file: string; userID: string; username: string }> = [];
     for (const track of metadata.tracks) {
+      options.onProgress?.(`Synchronizing speaker ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`);
       options.signal?.throwIfAborted();
       if (!Number.isInteger(track.track) || track.track < 1 || !users[track.track]) throw new Error("Invalid session track metadata.");
       const ogg = path.join(temporary, `track-${track.track}.ogg`);
       await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"),options.signal);
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
       if(options.includeRaw){
+        options.onProgress?.(`Saving uncut original ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`,sourceSeconds);
         const file=`raw-track-${track.track}.flac`;
         if(track.pcmFile){
           if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw Error("Invalid browser source.");
@@ -108,9 +113,13 @@ export async function exportSession(root: string, sessionID: string, options: Ex
         await convert(["-i",ogg,...excerpt,"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);
         await rename(trimmed,ogg);
       }
+      options.onProgress?.(`Converting speaker ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`,clipSeconds);
       const file = `track-${track.track}.${format==="aac"?"m4a":format}`;
       if (format !== "ogg") {
-        if(track.pcmFile&&["wav","flac"].includes(format)){
+        // Raw FLAC and the initial untrimmed speaker FLAC are identical. Later edits use
+        // temporary files plus rename, so sharing the initial bytes cannot modify the raw copy.
+        if(format==="flac"&&options.includeRaw&&!excerpt.length){await link(path.join(temporary,`raw-track-${track.track}.flac`),path.join(temporary,file));}
+        else if(track.pcmFile&&["wav","flac"].includes(format)){
           if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw new Error("Invalid browser source.");
           const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
           const args=["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`];
@@ -121,31 +130,36 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       if(edit){const edited=path.join(temporary,`edited-${track.track}.${format==="aac"?"m4a":format}`);await renderEdits(path.join(temporary,file),edited,edit,options.edits!.tracks.some(track=>track.solo),codecs[format],ffmpegPath(options),options.signal);await rename(edited,path.join(temporary,file));}
 
       manifest.push({ file, userID: track.id, username: edit?.name||track.username });
+      if(format!=="ogg")await rm(ogg);
     }
+    options.onProgress?.("Processing silence and loudness settings");
     let silenceCuts:SilenceCut[]=[];let trailingSilenceCut:SilenceCut|undefined;
-    if(options.trimSilence||options.trimEndSilence){const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track)),files=manifest.map(track=>path.join(temporary,track.file)),selected=new Set(manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>path.join(temporary,track.file)));const detected=await findSilenceCuts(files,selected,ffmpegPath(options),options.signal,options.silenceSeconds??30,options.trimEndSilence,!!options.trimSilence);silenceCuts=detected.cuts;trailingSilenceCut=detected.trailingCut;await cutSharedSilence(files,silenceCuts,detected.duration,codecs[format],ffmpegPath(options),options.signal);}
+    if(options.trimSilence||options.trimEndSilence){options.onProgress?.("Finding shared pauses and trailing silence across speakers");const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track)),files=manifest.map(track=>path.join(temporary,track.file)),selected=new Set(manifest.filter(track=>!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>path.join(temporary,track.file)));const detected=await findSilenceCuts(files,selected,ffmpegPath(options),options.signal,options.silenceSeconds??30,options.trimEndSilence,!!options.trimSilence,(file,seconds)=>{const speaker=manifest.find(track=>path.join(temporary,track.file)===file)?.username??path.basename(file);if(seconds===0)options.onProgress?.(`Analyzing silence: ${speaker}`,clipSeconds);exportProgressReporter()?.(seconds);});silenceCuts=detected.cuts;trailingSilenceCut=detected.trailingCut;options.onProgress?.(`Removing ${silenceCuts.length} silent sections while keeping speakers aligned`);await cutSharedSilence(files,silenceCuts,detected.duration,codecs[format],ffmpegPath(options),options.signal,(file,totalSeconds)=>options.onProgress?.(`Removing shared silence: ${manifest.find(track=>path.join(temporary,track.file)===file)?.username??path.basename(file)}`,totalSeconds));}
+    const processedSeconds=Math.max(0,clipSeconds-silenceCuts.reduce((sum,cut)=>sum+cut.end-cut.start,0));
     let introGain=1;
     const loudnessMatches:Record<string,LoudnessMatch>={};
     if(options.normalizeAudio||(intro&&options.normalizeIntro)){
-      const levels=new Map<string,AudioLevel>();for(const track of manifest){const file=path.join(temporary,track.file),level=await measureLevel(file,ffmpegPath(options),options.signal,false,loudnessSettings);if(options.normalizeAudio){const matched=await matchLoudness(file,codecs[format],ffmpegPath(options),options.signal,level,loudnessSettings);loudnessMatches[track.file]=matched;levels.set(track.file,matched.after);}else levels.set(track.file,level);}
-      if(intro&&options.normalizeIntro){const selected=manifest.filter(track=>!(options.excludeFromMix??[]).includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>levels.get(track.file)!).filter(level=>Number.isFinite(level.lufs));if(selected.length){const target=10*Math.log10(selected.reduce((sum,level)=>sum+10**(level.lufs/10),0)/selected.length),level=await measureLevel(introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),ffmpegPath(options),options.signal,true,loudnessSettings);introGain=normalizationGain(level,target,loudnessSettings.maxTruePeakDBTP);}}
+      const levels=new Map<string,AudioLevel>();for(const track of manifest){options.onProgress?.(`Measuring${options.normalizeAudio?" and matching":""} loudness: ${track.username}`,processedSeconds);const file=path.join(temporary,track.file),level=await measureLevel(file,ffmpegPath(options),options.signal,false,loudnessSettings);if(options.normalizeAudio){const matched=await matchLoudness(file,codecs[format],ffmpegPath(options),options.signal,level,loudnessSettings);loudnessMatches[track.file]=matched;levels.set(track.file,matched.after);}else levels.set(track.file,level);}
+      if(intro&&options.normalizeIntro){options.onProgress?.("Measuring intro loudness",intro.seconds);const selected=manifest.filter(track=>!(options.excludeFromMix??[]).includes(Number(/^track-(\d+)/.exec(track.file)![1]))).map(track=>levels.get(track.file)!).filter(level=>Number.isFinite(level.lufs));if(selected.length){const target=10*Math.log10(selected.reduce((sum,level)=>sum+10**(level.lufs/10),0)/selected.length),level=await measureLevel(introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),ffmpegPath(options),options.signal,true,loudnessSettings);introGain=normalizationGain(level,target,loudnessSettings.maxTruePeakDBTP);}}
     }
-    if(intro)for(const track of manifest){const file=track.file;if(intro){const shifted=path.join(temporary,`shifted-${file}`);await convert(["-i",path.join(temporary,file),"-af",`adelay=${Math.round(intro.seconds*48000)}S:all=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),shifted],ffmpegPath(options),options.signal);await rename(shifted,path.join(temporary,file));}}
-    if(intro){const number=Math.max(...metadata.tracks.map((track:{track:number})=>track.track))+1,file=`track-${number}.${format==="aac"?"m4a":format}`;await convert(["-f","s16le","-ar","48000","-ac","2","-i",introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),"-af",`volume=${introGain}`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);manifest.push({file,userID:"server-intro",username:"Intro: "+intro.name});}
+    if(intro)for(const track of manifest){options.onProgress?.(`Adding intro space before speaker: ${track.username}`,processedSeconds+intro.seconds);const file=track.file;if(intro){const shifted=path.join(temporary,`shifted-${file}`);await convert(["-i",path.join(temporary,file),"-af",`adelay=${Math.round(intro.seconds*48000)}S:all=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),shifted],ffmpegPath(options),options.signal);await rename(shifted,path.join(temporary,file));}}
+    if(intro){options.onProgress?.("Encoding the intro as a separate track",intro.seconds);const number=Math.max(...metadata.tracks.map((track:{track:number})=>track.track))+1,file=`track-${number}.${format==="aac"?"m4a":format}`;await convert(["-f","s16le","-ar","48000","-ac","2","-i",introPCM(root,metadata.guildID,intro.id,introRecordingID(options.introScope,sessionID),intro.channelID),"-af",`volume=${introGain}`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,file)],ffmpegPath(options),options.signal);manifest.push({file,userID:"server-intro",username:"Intro: "+intro.name});}
     let mix: string | undefined;
     if (options.mix) {
+      options.onProgress?.("Mixing speakers",processedSeconds+(intro?.seconds??0));
       mix = `mix.${format==="aac"?"m4a":format}`;
       const excluded=validateMixExclusions(options.excludeFromMix,metadata.tracks.map((track:{track:number})=>track.track));
       const mixedTracks=manifest.filter(track=>track.userID!=="server-intro"&&!excluded.includes(Number(/^track-(\d+)/.exec(track.file)![1])));
       const inputs = mixedTracks.flatMap(track => ["-i",path.join(temporary,track.file)]);
       await convert([...inputs,"-filter_complex",`amix=inputs=${mixedTracks.length}:duration=longest:normalize=1`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),path.join(temporary,mix)],ffmpegPath(options),options.signal);
       if(intro){const introTrack=manifest.find(track=>track.userID==="server-intro")!,introFile=path.join(temporary,introTrack.file),mixFile=path.join(temporary,mix);
-        if(options.normalizeIntro){const target=await measureLevel(mixFile,ffmpegPath(options),options.signal,false,loudnessSettings),level=await measureLevel(introFile,ffmpegPath(options),options.signal,false,loudnessSettings);if(Number.isFinite(target.lufs)){const gain=normalizationGain(level,target.lufs,loudnessSettings.maxTruePeakDBTP);await applyGain(introFile,gain,codecs[format],ffmpegPath(options),options.signal);introGain*=gain;}}
-        const combined=path.join(temporary,"intro-"+mix);await convert(["-i",mixFile,"-i",introFile,"-filter_complex","amix=inputs=2:duration=longest:normalize=0","-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),combined],ffmpegPath(options),options.signal);await rename(combined,mixFile);
+        let mixIntroGain=1;
+        if(options.normalizeIntro){options.onProgress?.("Measuring mixed audio for intro matching",processedSeconds+intro.seconds);const target=await measureLevel(mixFile,ffmpegPath(options),options.signal,false,loudnessSettings);options.onProgress?.("Matching the intro to the mixed audio",intro.seconds);const level=await measureLevel(introFile,ffmpegPath(options),options.signal,false,loudnessSettings);if(Number.isFinite(target.lufs)){mixIntroGain=normalizationGain(level,target.lufs,loudnessSettings.maxTruePeakDBTP);}}
+        const combined=path.join(temporary,"intro-"+mix);await convert(["-i",mixFile,"-i",introFile,"-filter_complex",`[1:a]volume=${mixIntroGain}[intro];[0:a][intro]amix=inputs=2:duration=longest:normalize=0`,"-c:a",codecs[format],...(format==="wav"?["-rf64","auto"]:[]),combined],ffmpegPath(options),options.signal);await rename(combined,mixFile);
       }
     }
+    if(options.normalizeAudio&&mix)options.onProgress?.("Matching loudness of the combined mix",processedSeconds+(intro?.seconds??0));
     if(options.normalizeAudio&&mix)loudnessMatches[mix]=await matchLoudness(path.join(temporary,mix),codecs[format],ffmpegPath(options),options.signal,undefined,loudnessSettings);
-    if (format !== "ogg") for (const track of metadata.tracks) await rm(path.join(temporary,`track-${track.track}.ogg`));
     let notes: string | undefined;
     let exportedNotes:Array<{seconds:number;text:string;authorID?:string}>=[];
     try {
@@ -158,11 +172,12 @@ export async function exportSession(root: string, sessionID: string, options: Ex
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     let syncCues;
     try{const sync=JSON.parse(await readFile(path.join(directory,"sync-cues.json"),"utf8"));syncCues={version:1,sessionID,cues:sync.cues.filter((cue:any)=>cue.state==="captured").map((cue:any)=>{const audioSeconds=cue.seconds-(metadata.audioOrigin??0)/48000;return {...cue,recordingSeconds:cue.seconds,originalAudioSeconds:audioSeconds,exportSeconds:!options.edits&&audioSeconds>=start&&(end===undefined||audioSeconds<end)&&(!trailingSilenceCut||audioSeconds-start<trailingSilenceCut.start)?shiftedTime(audioSeconds-start,silenceCuts)+(intro?.seconds??0):null};}),timingModified:!!(options.edits||options.trimSilence||options.trimEndSilence||intro||start||end!==undefined),note:"Cues identify timing differences; edits and processing can change alignment. For sync, use original audio and visual cue positions."};}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+    options.onProgress?.("Building project and packaging download");
     if(requestedFormat==="audacity")await writeAudacity(temporary,manifest,exportedNotes);
     const backupProjects=validateSavedBackups(options.backupProjects,requestedFormat);
     if(requestedFormat==="soundcraft")await writeSoundcraftProject(temporary,manifest,exportedNotes,metadata.title,backupProjects);
     if(requestedFormat==="audition")await writeAudition(temporary,manifest,exportedNotes,metadata.title);
-    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ syncCues, sessionID, guildID: metadata.guildID, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, backupProjects:backupProjects?.length?backupProjects:undefined, trackFormat:["audition","audacity","soundcraft"].includes(requestedFormat)?format:undefined, project:(["audition","audacity","soundcraft"].includes(requestedFormat)||options.includeRaw)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, loudness:(options.normalizeAudio||options.normalizeIntro)?{standard:"EBU R128 / ITU-R BS.1770",targetLUFS:loudnessSettings.targetLUFS,truePeakDBTP:loudnessSettings.maxTruePeakDBTP,tracks:loudnessMatches}:undefined, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceSeconds:options.trimSilence?(options.silenceSeconds??30):undefined, rawTracks:options.includeRaw?rawTracks:undefined, trimEndSilence:options.trimEndSilence??false, trailingSilenceCut, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence||options.trimEndSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
+    await writeFile(path.join(temporary, "manifest.json"), JSON.stringify({ syncCues, sessionID, guildID: metadata.guildID, guildName:metadata.guildName, startedAt: metadata.startedAt, channelName:metadata.channelName, channelID:metadata.channelID, title:metadata.title, edits:options.edits, format:requestedFormat, backupProjects:backupProjects?.length?backupProjects:undefined, trackFormat:["audition","audacity","soundcraft"].includes(requestedFormat)?format:undefined, project:(["audition","audacity","soundcraft"].includes(requestedFormat)||options.includeRaw)?"project.zip":undefined, normalizeAudio:options.normalizeAudio??false, loudness:(options.normalizeAudio||options.normalizeIntro)?{standard:"EBU R128 / ITU-R BS.1770",targetLUFS:loudnessSettings.targetLUFS,truePeakDBTP:loudnessSettings.maxTruePeakDBTP,tracks:loudnessMatches}:undefined, normalizeIntro:!!intro&&!!options.normalizeIntro, introGain, silenceSeconds:options.trimSilence?(options.silenceSeconds??30):undefined, rawTracks:options.includeRaw?rawTracks:undefined, trimEndSilence:options.trimEndSilence??false, trailingSilenceCut, silenceCuts, intro, tracks: manifest, mix, excludeFromMix:(options.mix||options.trimSilence||options.trimEndSilence)?options.excludeFromMix:undefined, notes, trim: (start>0||end!==undefined)?{start,end}:undefined }, null, 2));
     if(["audition","audacity","soundcraft"].includes(requestedFormat)||options.includeRaw)await writeProjectZip(temporary,options.signal);
     options.signal?.throwIfAborted();
     await rename(temporary, target);

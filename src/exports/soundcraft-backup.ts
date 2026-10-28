@@ -3,6 +3,7 @@ import path from "node:path";
 import {UserError} from "../errors";
 import {writeSoundcraft} from "./soundcraft";
 import {writeAudition} from "./audition";
+import {link} from "node:fs/promises";
 import {writeAudacity} from "./audacity";
 
 /** Per-server admin choice for fallback projects packaged with Soundcraft exports while Soundcraft support is tested. */
@@ -54,10 +55,14 @@ export function validateSavedBackups(value:unknown,format:string):BackupProject[
 /** Writes session.scraft plus any selected backup projects; every project references one shared copy of each track. */
 export async function writeSoundcraftProject(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>,title:string|undefined,backups:BackupProject[]=[]):Promise<void>{
  const projects=validateSavedBackups(backups,"soundcraft")!;
- let media="";
- if(projects.includes("audacity")){await writeAudacity(directory,tracks,notes,{project:path.basename(AUDACITY_BACKUP_PROJECT,".aup")});media=AUDACITY_BACKUP_MEDIA+"/";}
- await writeSoundcraft(directory,tracks,notes,title,media);
- if(projects.includes("audition"))await writeAudition(directory,tracks,notes,title,{filename:AUDITION_BACKUP_PROJECT,media});
+ let media="",projectTracks=tracks;
+ if(projects.includes("audacity")){
+  projectTracks=await writeAudacity(directory,tracks,notes,{project:path.basename(AUDACITY_BACKUP_PROJECT,".aup")});media=AUDACITY_BACKUP_MEDIA+"/";
+  // Project writers inspect media at the root; aliases are hard links and only the nested copy is packaged.
+  for(let i=0;i<tracks.length;i++)if(projectTracks[i].file!==tracks[i].file)await link(path.join(directory,tracks[i].file),path.join(directory,projectTracks[i].file));
+ }
+ await writeSoundcraft(directory,projectTracks,notes,title,media);
+ if(projects.includes("audition"))await writeAudition(directory,projectTracks,notes,title,{filename:AUDITION_BACKUP_PROJECT,media});
  if(!projects.length)return;
  const lines=["The Witness: optional backup projects for Soundcraft testing","",
   "Open session.scraft in Soundcraft first. These backup projects are included only as a fallback while Soundcraft support is being tested.",""];

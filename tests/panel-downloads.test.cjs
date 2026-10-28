@@ -24,6 +24,26 @@ test('Audition WAV and Audacity FLAC exports contain the selected audio and a pr
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-project-format-'));
  try{const session=await RecordingSession.create(root,'guild','voice'),encoder=new OpusEncoder(48000,2),pcm=Buffer.alloc(3840);
  for(let i=0;i<20;i++)await session.append(encoder.encode(pcm),'speaker','Speaker',i*960);await session.close();
- for(const [format,trackFormat] of [['audition','wav'],['audacity','flac']]){const directory=await exportSession(root,session.id,{format,trackFormat}),manifest=JSON.parse(await readFile(path.join(directory,'manifest.json')));assert.equal(manifest.trackFormat,trackFormat);assert.ok(manifest.tracks[0].file.endsWith('.'+trackFormat));const zip=await readFile(path.join(directory,'project.zip'));assert.equal(zip.subarray(0,2).toString(),'PK');if(format==='audacity')assert.ok(zip.includes(Buffer.from('session_data/'+manifest.tracks[0].file)));}
+ for(const [format,trackFormat] of [['audition','wav'],['audacity','flac']]){const directory=await exportSession(root,session.id,{format,trackFormat}),manifest=JSON.parse(await readFile(path.join(directory,'manifest.json')));assert.equal(manifest.trackFormat,trackFormat);assert.ok(manifest.tracks[0].file.endsWith('.'+trackFormat));const zip=await readFile(path.join(directory,'project.zip'));assert.equal(zip.subarray(0,2).toString(),'PK');if(format==='audacity')assert.ok(zip.includes(Buffer.from('session_data/'+manifest.tracks[0].username+'.'+trackFormat)));}
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('two saved recordings keep distinct export jobs and expose the selected recording identity',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-session-routing-'));let service;
+ const sessions=[{id,startedAt:'2026-10-20T22:33:44.608Z',channelName:'Lobby'},{id:other,startedAt:'2026-10-27T22:37:15.834Z',channelName:'Quests from the Infinite staircase'}];
+ const jobs=new Map(),calls=[];
+ try{
+  for(const session of sessions){await mkdir(path.join(root,session.id));await writeFile(path.join(root,session.id,'session.json'),JSON.stringify({...session,guildID:'guild',channelID:'voice',state:'completed',tracks:[{track:1,id:'speaker',username:'Alice'}]}));}
+  service=await DownloadService.create(root,'https://example.com');
+  service.attach({enqueue:async(sessionID,guildID,format)=>{calls.push(sessionID);const job={id:sessionID,sessionID,guildID,format,state:'queued',stage:'Waiting'};jobs.set(job.id,job);return job;},get:key=>jobs.get(key),position:()=>1},{get:()=>({})},{});
+  const port=await service.listen(0,'127.0.0.1'),local=url=>url.replace('https://example.com',`http://127.0.0.1:${port}`);
+  for(const selected of sessions){
+   const result=await fetch(local(service.recordingLink(selected.id)),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:'wav',sessionID:sessions.find(s=>s.id!==selected.id).id})});
+   assert.equal(result.status,202);const {url}=await result.json();
+   const status=await (await fetch(local(url),{headers:{Accept:'application/json'}})).json();
+   assert.equal(status.recording.sessionID,selected.id);assert.equal(status.recording.startedAt,selected.startedAt);assert.equal(status.recording.channelName,selected.channelName);
+   const html=await (await fetch(local(url))).text();new (require('node:vm').Script)(/<script>([\s\S]*?)<\/script>/.exec(html)[1]);assert.ok(html.includes('recording-summary'));
+  }
+  assert.deepEqual(calls,[id,other]);
+ }finally{await service?.close();await rm(root,{recursive:true,force:true});}
 });

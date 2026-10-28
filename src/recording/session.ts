@@ -55,12 +55,12 @@ export class RecordingSession {
   private accepting = true;
   private failure?: Error;
 
-  private constructor(root: string, readonly guildID: string, readonly channelID: string, readonly channelName?: string, readonly durationHours = DEFAULT_RECORDING_DURATION_HOURS) {
+  private constructor(root: string, readonly guildID: string, readonly channelID: string, readonly channelName?: string, readonly durationHours = DEFAULT_RECORDING_DURATION_HOURS, readonly guildName?:string) {
     this.directory = path.join(root, this.id);
   }
 
-  static async create(root: string, guildID: string, channelID: string, channelName?: string, durationHours = DEFAULT_RECORDING_DURATION_HOURS): Promise<RecordingSession> {
-    const session = new RecordingSession(root, guildID, channelID, channelName, validateRecordingDuration(durationHours));
+  static async create(root: string, guildID: string, channelID: string, channelName?: string, durationHours = DEFAULT_RECORDING_DURATION_HOURS, guildName?:string): Promise<RecordingSession> {
+    const session = new RecordingSession(root, guildID, channelID, channelName, validateRecordingDuration(durationHours), guildName);
     await mkdir(session.directory, { recursive: true });
     try {
       for (const name of ["header1", "header2", "data", "users", "notes"]) {
@@ -69,7 +69,7 @@ export class RecordingSession {
       await session.write("users", Buffer.from('"0":{}\n'));
       await writeFile(path.join(session.directory, "audio.ogg.info"), JSON.stringify({
         format: 1, guild: guildID, channel: channelID,
-        guildExtra: { id: guildID, name: guildID },
+        guildExtra: { id: guildID, name: guildName ?? guildID },
         channelExtra: { id: channelID, name: channelName ?? channelID, type: 2 },
         startTime: session.startedAt, features: recordingFeatures
       }, null, 2));
@@ -105,7 +105,7 @@ export class RecordingSession {
   private async metadata(endedAt?: string): Promise<void> {
     const target = path.join(this.directory, "session.json");
     await writeFile(target + ".tmp", JSON.stringify({
-      id: this.id, title:this.title, guildID: this.guildID, channelID: this.channelID, channelName: this.channelName,
+      id: this.id, title:this.title, guildID: this.guildID, guildName:this.guildName, channelID: this.channelID, channelName: this.channelName,
       startedAt: this.startedAt, endedAt, state: this.state, packets: this.packets, notes: this.notes, audioOrigin: this.audioOrigin, packetStats: this.packetStats, guestFramesDropped: this.guestFramesDropped || undefined,
       durationSamples:Number(this.elapsedSamples()),durationHours:this.durationHours, diagnosticStopReason:this.stopReason==="duration-limit"?"max_duration":this.stopReason, error: this.failure?.message, stopReason: this.stopReason, tracks: [...this.tracks.values()].map(({ packet, ...track }) => track)
     }, null, 2));

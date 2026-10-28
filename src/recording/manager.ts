@@ -34,7 +34,7 @@ export class RecordingManager {
   if(await this.diskCritical())throw Error("Disk space is critically low. Free up space before starting a recording.");
   if(this.shuttingDown)throw Error("The Witness is shutting down.");
   await assertDeploymentIdle(this.root);
-  const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,this.settings?.get(guild.id).recordingDurationHours);
+  const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,this.settings?.get(guild.id).recordingDurationHours,guild.name);
   try{if(this.shuttingDown)throw Error("The Witness is shutting down.");await assertDeploymentIdle(this.root);this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
   session.onDurationWarning=async minutes=>{if(this.sessions.get(guild.id)===session)await this.onDurationWarning?.(session,minutes);};

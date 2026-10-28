@@ -245,8 +245,10 @@ export class DownloadService {
       mixerURL?.searchParams.set("editor","1");
       let downloadURL=result&&url.searchParams.get("mixed")==="1"?result:undefined;
       if(result&&["audacity","audition","soundcraft"].includes(job.format)){const target=new URL(result);target.pathname+="/project.zip";downloadURL=target.toString();}
+      let recording;
+      try{const source=await getSession(this.root,job.sessionID,job.guildID);recording={sessionID:source.id,startedAt:source.startedAt,channelName:source.channelName||source.channelID,title:source.title};}catch{/* Status remains available if the source was removed. */}
       const position=this.queue!.position(job.id);
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,state:job.state,stage:position?(job.stage?.startsWith("Waiting for disk space")?`${job.stage} Queue position ${position}.`:`Waiting in the export queue: position ${position}`):job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?"Export failed. Check the bot logs.":undefined});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{id:job.id,recording,progress:job.state==="running"?job.progress:undefined,state:job.state,stage:position?(job.stage?.startsWith("Waiting for disk space")?`${job.stage} Queue position ${position}.`:`Waiting in the export queue: position ${position}`):job.stage,position,url:result,downloadURL,exportURL,mixerURL:mixerURL?.toString(),recordingURL:this.recordingLink(job.sessionID),error:job.state==="failed"?(job.publicError??"Export failed. Check the bot logs."):undefined});
       return this.html(response,exportProgressPage());
     }
     if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "POST") return this.error(response,405,"Method not allowed.");
@@ -268,8 +270,8 @@ export class DownloadService {
     // Raw-source excerpt offsets cannot describe timelines changed by edits, intros or silence cuts.
     const sourceExcerptAllowed=!manifest.edits&&!manifest.intro&&!manifest.silenceCuts?.length&&!manifest.trailingSilenceCut;
     // Older exports predate channel metadata; read it from the authorized source session.
-    if(manifest.guildID&&(!manifest.channelName||!manifest.channelID)){
-      try{const source=await getSession(this.root,parts[2]!,manifest.guildID);manifest.channelName??=source.channelName;manifest.channelID??=source.channelID;}
+    if(manifest.guildID&&(!manifest.guildName||!manifest.channelName||!manifest.channelID)){
+      try{const source=await getSession(this.root,parts[2]!,manifest.guildID);manifest.guildName??=source.guildName;manifest.channelName??=source.channelName;manifest.channelID??=source.channelID;}
       catch{ /* Existing authorized downloads remain usable if source metadata is unavailable. */ }
     }
     const requestedNaming=url.searchParams.get("names");

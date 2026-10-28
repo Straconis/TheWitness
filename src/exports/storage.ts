@@ -30,6 +30,19 @@ export async function estimateExportBytes(root:string,job:ExportJob):Promise<num
  if(!Number.isSafeInteger(bytes)||bytes<=0)throw Error("Cannot safely estimate export disk use.");
  return bytes;
 }
+/** Reserve two full 24-bit stereo output/scratch slots for sequential FLAC tools. */
+export async function estimateSequentialWorkspace(root:string,job:ExportJob):Promise<number>{
+ const metadata=JSON.parse(await readFile(path.join(root,job.sessionID,"session.json"),"utf8"));
+ const samples=Number(metadata.durationSamples),elapsed=samples/48000;
+ const duration=Number.isFinite(elapsed)&&elapsed>0?elapsed:(Date.parse(metadata.endedAt)-Date.parse(metadata.startedAt))/1000;
+ if(!Number.isFinite(duration)||duration<=0)throw Error("Cannot verify recording length for sequential export.");
+ const intro=job.introID?await getServerIntro(root,job.guildID,job.introID,introRecordingID(job.introScope,job.sessionID),metadata.channelID):undefined;
+ // Keep full source duration: raw copies and correction are not limited by an excerpt.
+ const seconds=Math.max(duration,Math.min(duration,job.trimEnd??duration)-(job.trimStart??0))+(intro?.seconds??0);
+ const bytes=Math.ceil(seconds*288000*2*1.15+1024**2);
+ if(!Number.isSafeInteger(bytes)||bytes<=0)throw Error("Cannot safely estimate sequential export workspace.");
+ return bytes;
+}
 async function directories(root:string){return (await readdir(root,{withFileTypes:true})).filter(entry=>entry.isDirectory()&&sessionIDPattern.test(entry.name));}
 /** Startup only, before exporters start. Never remove originals or follow directory symlinks. */
 export async function cleanTransientArtifacts(root:string):Promise<void>{

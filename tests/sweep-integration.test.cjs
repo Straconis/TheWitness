@@ -22,8 +22,8 @@ test('a queued Soundcraft export with both backups and a transcript re-packages 
   const zip=path.join(root,id,queue.get(job.id).directory,'project.zip');
   const listed=spawnSync('python3',['-I','-c','import zipfile,sys,json;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(json.dumps(sorted(z.namelist())))',zip],{encoding:'utf8'});assert.equal(listed.status,0,listed.stderr);
   const names=JSON.parse(listed.stdout);
-  for(const name of ['session.scraft','backup-audition.sesx','backup-audacity.aup','BACKUP-PROJECTS.txt','transcript.txt','transcript.srt','transcript.vtt','backup-audacity_data/track-1.wav','manifest.json'])assert.ok(names.includes(name),name+' in '+names);
-  assert.deepEqual(names.filter(name=>/track-\d+\.(wav|flac)$/.test(name)),['backup-audacity_data/track-1.wav'],'one copy of the audio');
+  for(const name of ['session.scraft','backup-audition.sesx','backup-audacity.aup','BACKUP-PROJECTS.txt','transcript.txt','transcript.srt','transcript.vtt','backup-audacity_data/Alice.wav','manifest.json'])assert.ok(names.includes(name),name+' in '+names);
+  assert.deepEqual(names.filter(name=>/\.(wav|flac)$/.test(name)),['backup-audacity_data/Alice.wav'],'one copy of the audio');
   const transcript=await readFile(path.join(root,id,queue.get(job.id).directory,'transcript.txt'),'utf8');assert.match(transcript,/Spoken words/);assert.ok(!/Silence/.test(transcript));
  }finally{for(const key of ['TRANSCRIPTION_EXECUTABLE','TRANSCRIPTION_MODEL','TRANSCRIPTION_VAD_MODEL','FFMPEG_PATH'])if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key];await queue?.close();queue?.releaseIntroReferences();await rm(root,{recursive:true,force:true});}
 });

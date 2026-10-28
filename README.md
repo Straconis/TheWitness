@@ -461,3 +461,17 @@ Whisper sometimes turns speech that is barely audible over background noise into
 small.en needs roughly 2–3 times base.en's CPU time and about 1 GB of RAM per running transcription (multiplied by `EXPORT_CONCURRENCY`). `TRANSCRIPTION_TIMEOUT_MINUTES` applies to each five-minute chunk.
 
 **Custom intro limits.** Each recording keeps its three newest custom intros (plus any an export job uses or is validating) and allows three uploads in progress at once; abandoned uploads expire after an hour. These limits are enforced per recording inside one bot process. Uploads from different recordings and servers are converted one at a time and wait their turn. Unused custom intros are removed after 48 hours, so retrying an old failed export that used one needs the intro uploaded again.
+
+### Prepared downloads and naming
+
+Audacity ZIPs contain `session.aup` and its matching `session_data` folder. Extract the whole ZIP and open `session.aup`: the project imports the synchronized, speaker-named audio automatically, with recording notes. No manual track assembly is required. Save from Audacity to create its native `.aup3` file. Media names distinguish duplicate speaker names. Soundcraft backup projects share those same named media files.
+
+The preparation page reports synchronization/conversion by speaker, processing, mixing, and packaging, with an activity indicator and elapsed time. ZIP download names include the UTC recording start date, Discord server, and voice room, such as `2026-10-27-My-Server-General-Voice.zip`. New recordings preserve the server name; older recordings fall back to the saved server ID. Original filename mode remains available. The download date never replaces the recording date.
+
+### FLAC exports on smaller disks
+
+When a complete FLAC export estimate exceeds available space, the built-in exporter can run one export at a time with sequential disk checks. This path supports original recording exports, including uncut originals, mixing, intros, normalization and silence trimming. Edited-source exports, transcription and cloud uploads retain the full upfront reservation. It reserves workspace for two uncompressed 24-bit stereo tracks and checks free space before each audio tool. Corrected Opus intermediates are removed after each speaker; identical untrimmed raw/processed FLAC files initially share storage using hard links. Processing writes replacements, preserving the raw originals. ZIP admission uses the actual packaged media sizes. The recording reserve and emergency disk monitor remain active; a failed step removes its temporary export and keeps the source recording.
+
+Progress reports name the speaker and operation. Encoding steps also show the actual amount of audio processed in that step; once five seconds of timing data are available, the page estimates time remaining for that audio pass using observed speed. It resets for each pass and does not claim an overall completion time.
+
+Intro matching preserves separate project and mix levels: the mix applies its intro adjustment while combining audio, without changing the intro file used by the editing project. Silence detection skips sample windows already known to contain a selected speaker; its shared 100 ms detection windows and synchronized cuts are unchanged.

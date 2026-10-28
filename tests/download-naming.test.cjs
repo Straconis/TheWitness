@@ -10,7 +10,7 @@ const { RecordingSession } = require('../dist/recording/session');
 const manifest = {startedAt:'2026-10-01T22:55:00-04:00',channelName:'#General Voice',channelID:'123',title:'A title',trim:{start:5,end:10},tracks:[]};
 test('ZIP names use UTC recording date for both Discord and web base filenames',()=>{
  for(const file of ['witness-audition.zip','witness-wav.zip','project.zip']){
-  assert.equal(downloadName(file,manifest,'date'),'2026-10-02.zip');
+  assert.equal(downloadName(file,manifest,'date'),'2026-10-02-General-Voice.zip');
   assert.equal(downloadName(file,manifest,'date-channel'),'2026-10-02-General-Voice.zip');
   assert.equal(downloadName(file,manifest,'original'),file);
  }
@@ -42,7 +42,7 @@ test('private web headers honor saved naming choice and per-link override',async
   await writeFile(path.join(root,id,'session.json'),JSON.stringify({id,guildID:'guild',channelID:'456',startedAt:manifest.startedAt,state:'completed',tracks:[]}));
   await writeFile(path.join(dir,'manifest.json'),JSON.stringify({...manifest,channelName:undefined,channelID:undefined,guildID:'guild',format:'audition',project:'project.zip'}));
   const file=new URL(page);file.pathname+='/project.zip';
-  for(const [style,name] of [[null,'2026-10-02-456.zip'],['date','2026-10-02.zip'],['original','project.zip']]){
+  for(const [style,name] of [[null,'2026-10-02-guild-456.zip'],['date','2026-10-02-guild-456.zip'],['original','project.zip']]){
    if(style)file.searchParams.set('names',style);const response=await fetch(file);assert.equal(response.status,200);assert.equal(response.headers.get('content-disposition'),`attachment; filename="${name}"`);assert.equal(await response.text(),'zip');
   }
  }finally{await service?.close();await rm(root,{recursive:true,force:true});}

@@ -1,3 +1,4 @@
+import {exportProgressReporter} from "./workspace";
 import {promisify} from "node:util";
 import {spawn,execFile} from "node:child_process";
 import {once} from "node:events";
@@ -33,8 +34,10 @@ export async function measureLevel(file:string,ffmpeg:string,signal?:AbortSignal
  const {targetLUFS,maxTruePeakDBTP}=resolveLoudness(settings);
  signal?.throwIfAborted();const range=await loudnessRange(ffmpeg);
  const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);
- const child=deprioritize(spawn(ffmpeg,["-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=${range}:print_format=json`,"-f","null","-"],{stdio:["ignore","ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
- const closed=processClosed(child);let stderr="";child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
+ const report=exportProgressReporter();report?.(0);
+ const child=deprioritize(spawn(ffmpeg,[...(report?["-progress","pipe:1","-stats_period","1","-nostats"]:[]),"-nostdin","-hide_banner","-v","info",...(raw?["-f","s16le","-ar","48000","-ac","2"]:[]),"-i",file,"-af",`loudnorm=I=${targetLUFS}:TP=${maxTruePeakDBTP}:LRA=${range}:print_format=json`,"-f","null","-"],{stdio:["ignore",report?"pipe":"ignore","pipe"],signal:combined,killSignal:"SIGKILL"}));
+ let pending="";if(report)child.stdout!.on("data",chunk=>{pending+=chunk.toString();const lines=pending.split("\n");pending=lines.pop()!.slice(-4096);for(const line of lines){const match=/^out_time_us=(\d+)$/.exec(line.trim());if(match)report(Number(match[1])/1e6);}});
+ const closed=processClosed(child);let stderr="";child.stderr!.on("data",chunk=>stderr=(stderr+chunk).slice(-16384));
  try{
   const [code]=await once(child,"close");if(code!==0)throw Error("Cannot measure audio loudness: "+stderr);
   const json=/\{\s*"input_i"[\s\S]*?\}/.exec(stderr);if(!json)throw Error("Audio tool did not return loudness measurements. Rebuild the bundled FFmpeg with loudnorm enabled.");

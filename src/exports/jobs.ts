@@ -1,6 +1,8 @@
+import {estimateStepRemaining} from "./progress";
+import {withExportSpaceCheck,withExportProgress} from "./workspace";
 import {assertSoundcraftLength,soundcraftExportSeconds} from "./soundcraft-limits";
 import {resolveBackupProjects,validateSavedBackups,DEFAULT_SOUNDCRAFT_BACKUP,BackupProject,SoundcraftBackupMode} from "./soundcraft-backup";
-import {estimateExportBytes,sweepArtifacts,JOB_RETENTION_MS} from "./storage";
+import {estimateExportBytes,estimateSequentialWorkspace,sweepArtifacts,JOB_RETENTION_MS} from "./storage";
 import type {StorageSpace} from "../storage/space";
 import {UserError} from "../errors";
 import {resolveLoudness,TARGET_LUFS,TRUE_PEAK_DBTP} from "./normalization";
@@ -22,7 +24,7 @@ import path from "node:path";
 import { exportSession, ExportFormat } from "./export";
 import { getSession,sessionIDPattern } from "../storage/sessions";
 type Extras={targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean;normalizeIntro?:boolean;trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean;includeIntro?:boolean;introID?:string;introScope?:IntroScope;excludeFromMix?:number[];trackFormat?:ProjectTrackFormat;sourceExport?:string;edits?:AudioEdits;transcribe?:boolean;upload?:CloudProvider;trimStart?:number;trimEnd?:number;backupProjects?:BackupProject[]};
-export interface ExportJob extends Extras {id:string;sessionID:string;guildID:string;format:ExportFormat;mix:boolean;state:"queued"|"running"|"cancelling"|"cancelled"|"completed"|"failed";createdAt:string;queueOrder?:number;directory?:string;error?:string;stage?:string;retryOf?:string}
+export interface ExportJob extends Extras {id:string;sessionID:string;guildID:string;format:ExportFormat;mix:boolean;state:"queued"|"running"|"cancelling"|"cancelled"|"completed"|"failed";createdAt:string;queueOrder?:number;directory?:string;error?:string;publicError?:string;stage?:string;progress?:{processedSeconds:number;totalSeconds?:number;remainingSeconds?:number};retryOf?:string}
 /** Like Craig's QUEUE_SIZE: how many exports run at once across every server; later jobs wait in order. */
 export function exportConcurrency(value=process.env.EXPORT_CONCURRENCY?.trim()):number{if(!value)return 1;const limit=Number(value);if(!Number.isInteger(limit)||limit<1||limit>16)throw new Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");return limit;}
 export class ExportQueue {
@@ -30,6 +32,7 @@ export class ExportQueue {
  private accounts:CloudAccounts;
  private started=false;private diskPaused=false;private diskAborted=new Set<string>();private reservations=new Map<string,number>();private diskPausing?:Promise<void>;private diskGuard?:NodeJS.Timeout;private maintenanceTimer?:NodeJS.Timeout;
  private cooldown?:NodeJS.Timeout;
+ private sequentialWorkspace=new Map<string,number>();
  private sequence=0;
  /** Lets custom-intro pruning see every intro a job uses, at the moment it prunes. Stays registered after close(). */
  private unregisterIntroReferences=registerIntroReferences(()=>this.introReferences());
@@ -115,12 +118,18 @@ export class ExportQueue {
   while(!this.stopped&&!this.diskPaused&&!this.cooldown&&this.running.size<this.concurrency){
    if(await this.diskCritical()){this.pause();return;}
    if(this.stopped||this.diskPaused||this.cooldown)return;
+   if(this.sequentialWorkspace.size)return;
    const job=this.queued()[0];if(!job)return;
    if(this.inspectSpace){
     let required:number;try{required=await estimateExportBytes(this.root,job);}catch(error){job.state="failed";job.stage="Failed";job.error=error instanceof Error?error.message:String(error);console.error(`[Export] Job ${job.id} failed during disk preflight:`,error);await this.save(job);continue;}
     const space=await this.inspectSpace();
     if(this.stopped||this.diskPaused||this.cooldown)return;
     const reserved=[...this.reservations.values()].reduce((sum,bytes)=>sum+bytes,0);
+    if(space.availableBytes-space.warningBytes-reserved<required&&this.exporter===exportSession&&resolveAudioFormat(job.format,job.trackFormat)==="flac"&&!job.sourceExport&&!job.edits&&!job.transcribe&&!job.upload&&!this.running.size){
+     const workspace=await estimateSequentialWorkspace(this.root,job);
+     if(this.stopped||this.diskPaused||this.cooldown)return;
+     if(space.availableBytes-space.warningBytes>=workspace){this.sequentialWorkspace.set(job.id,workspace);required=workspace;}
+    }
     if(space.availableBytes-space.warningBytes-reserved<required){const stage=`Waiting for disk space: estimated ${(required/1024**3).toFixed(2)} GiB needed; free space must also cover the recording reserve.`;if(job.stage!==stage){job.stage=stage;await this.save(job);}this.pause();return;}
     this.reservations.set(job.id,required);
    }
@@ -129,18 +138,30 @@ export class ExportQueue {
     console.error("[Export queue] Storage failed; retrying in 30 seconds.",error);
     if(job.state==="running"){this.active.delete(job.id);job.state="queued";job.stage="Waiting to retry";}
     if(!this.cooldown)this.pause();
-   }).finally(()=>{this.running.delete(job.id);this.reservations.delete(job.id);this.kick();});
+   }).finally(()=>{this.running.delete(job.id);this.reservations.delete(job.id);this.sequentialWorkspace.delete(job.id);this.kick();});
   }
  }
  private async process(job:ExportJob):Promise<void>{const controller=new AbortController(),signal=controller.signal;this.active.set(job.id,controller);job.state="running";job.stage="Preparing audio";
   try{await this.save(job);}catch(error){this.active.delete(job.id);job.state=(job as ExportJob).state==="cancelling"?"cancelled":"queued";job.stage=job.state==="cancelled"?"Cancelled":"Waiting to retry";this.pendingPersistence.add(job);this.diskAborted.delete(job.id);throw error;}
   try{
-   signal.throwIfAborted();const directory=await this.exporter(this.root,job.sessionID,{format:job.format,trackFormat:job.trackFormat,targetLUFS:job.targetLUFS,maxTruePeakDBTP:job.maxTruePeakDBTP,normalizeAudio:job.normalizeAudio,normalizeIntro:job.normalizeIntro,trimSilence:job.trimSilence,trimEndSilence:job.trimEndSilence,silenceSeconds:job.silenceSeconds,includeRaw:job.includeRaw,introID:job.introID,introScope:job.introScope,mix:job.mix,excludeFromMix:job.excludeFromMix,trimStart:job.trimStart,trimEnd:job.trimEnd,edits:job.edits,sourceExport:job.sourceExport,backupProjects:job.backupProjects,signal});job.directory=path.basename(directory);signal.throwIfAborted();
+   signal.throwIfAborted();let currentStage=job.stage!,stepSeconds:number|undefined,stepBegan=Date.now();const exportWork=()=>this.exporter(this.root,job.sessionID,{format:job.format,trackFormat:job.trackFormat,targetLUFS:job.targetLUFS,maxTruePeakDBTP:job.maxTruePeakDBTP,normalizeAudio:job.normalizeAudio,normalizeIntro:job.normalizeIntro,trimSilence:job.trimSilence,trimEndSilence:job.trimEndSilence,silenceSeconds:job.silenceSeconds,includeRaw:job.includeRaw,introID:job.introID,introScope:job.introScope,mix:job.mix,excludeFromMix:job.excludeFromMix,trimStart:job.trimStart,trimEnd:job.trimEnd,edits:job.edits,sourceExport:job.sourceExport,backupProjects:job.backupProjects,onProgress:(stage,totalSeconds)=>{stepSeconds=totalSeconds;job.progress=undefined;currentStage=(this.sequentialWorkspace.has(job.id)?"Low-space export: ":"")+stage;job.stage=currentStage;},signal});
+   const workspace=this.sequentialWorkspace.get(job.id);
+   const render=()=>workspace?withExportSpaceCheck(async bytes=>{
+    signal.throwIfAborted();const current=await this.inspectSpace!();signal.throwIfAborted();
+    const needed=bytes??workspace;
+    if(current.availableBytes-current.warningBytes<needed)throw new UserError(`Not enough space for the next export step: ${(needed/1024**3).toFixed(2)} GiB needed beyond the recording reserve. Temporary export files were removed; the recording is preserved.`);
+   },exportWork):exportWork();
+   const directory=await withExportProgress(seconds=>{
+    if(seconds===0)stepBegan=Date.now();
+    job.progress={processedSeconds:seconds,totalSeconds:stepSeconds,remainingSeconds:estimateStepRemaining(seconds,stepSeconds,Date.now()-stepBegan)};
+    const elapsed=Math.floor(seconds),time=[Math.floor(elapsed/3600),Math.floor(elapsed/60)%60,elapsed%60].map(value=>String(value).padStart(2,"0")).join(":");
+    job.stage=`${currentStage} — ${time} of audio processed in this step`;
+   },render);job.directory=path.basename(directory);signal.throwIfAborted();
    if(job.transcribe){job.stage="Transcribing";await this.save(job);await transcribeExport(directory,{...await checkedTranscriptionConfig(),ffmpeg:process.env.FFMPEG_PATH?.trim()||(existsSync(path.resolve(__dirname,"../../bin/ffmpeg"))?path.resolve(__dirname,"../../bin/ffmpeg"):"ffmpeg"),signal});}
    if(job.transcribe&&(["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw)){await rm(path.join(directory,"project.zip"));await writeProjectZip(directory,signal);}
    if(job.upload){this.assertUploadAllowed(job.guildID);job.stage="Uploading";await this.save(job);for(const filename of await readdir(directory)){signal.throwIfAborted();if((["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw)&&filename!=="project.zip")continue;if(!/^(track-\d+|mix|manifest|notes|transcript|session|project)\.(ogg|wav|flac|mp3|m4a|json|txt|srt|vtt|sesx|aup|scraft|zip)$/.test(filename))continue;const prefix=job.upload.toUpperCase();await uploadFile(job.upload,path.join(directory,filename),{token:await this.accounts.token(job.upload,signal),folder:process.env[`${prefix}_FOLDER`],name:`witness-${job.id}-${filename}`,signal});}}
    signal.throwIfAborted();job.state="completed";job.stage="Ready";
-  }catch(error){job.state=signal.aborted?((this.stopped||this.diskAborted.has(job.id))&&(job as ExportJob).state!=="cancelling"?"queued":"cancelled"):"failed";job.error=signal.aborted?undefined:error instanceof Error?error.message:String(error);job.stage=job.state==="queued"?(this.diskAborted.has(job.id)?"Waiting for disk space":"Waiting for restart"):job.state==="cancelled"?"Cancelled":"Failed";if(this.diskAborted.has(job.id)&&job.directory&&/^export-[a-f0-9-]{36}$/i.test(job.directory)){await rm(path.join(this.root,job.sessionID,job.directory),{recursive:true,force:true});job.directory=undefined;}if(job.state==="failed")console.error(`[Export] Job ${job.id} failed:`,error);}
+  }catch(error){job.publicError=error instanceof UserError?error.message:undefined;job.state=signal.aborted?((this.stopped||this.diskAborted.has(job.id))&&(job as ExportJob).state!=="cancelling"?"queued":"cancelled"):"failed";job.error=signal.aborted?undefined:error instanceof Error?error.message:String(error);job.stage=job.state==="queued"?(this.diskAborted.has(job.id)?"Waiting for disk space":"Waiting for restart"):job.state==="cancelled"?"Cancelled":"Failed";if(this.diskAborted.has(job.id)&&job.directory&&/^export-[a-f0-9-]{36}$/i.test(job.directory)){await rm(path.join(this.root,job.sessionID,job.directory),{recursive:true,force:true});job.directory=undefined;}if(job.state==="failed")console.error(`[Export] Job ${job.id} failed:`,error);}
   finally{this.active.delete(job.id);this.diskAborted.delete(job.id);try{await this.save(job);}catch(error){this.pendingPersistence.add(job);throw error;}}
  }
  async pauseForDisk():Promise<void>{

@@ -10,7 +10,7 @@ export async function writeSoundcraft(directory:string,tracks:Array<{file:string
  let nextID=1;const alloc=()=>nextID++;
  const sources=[],audio=[];
  for(const track of tracks){
-  if(!/^track-\d+\.(wav|flac)$/.test(track.file))throw new Error("Invalid Soundcraft audio file.");
+  if(!/^[^/\\\x00-\x1f]+\.(wav|flac)$/.test(track.file))throw new Error("Invalid Soundcraft audio file.");
   const frames=await projectSamples(path.join(directory,track.file));assertSoundcraftLength(frames/48000);
   const source=alloc(),id=alloc(),clip=alloc();
   sources.push({id:source,name:track.username,path:media+track.file,channels:2,frames,sample_rate:48000,format:track.file.endsWith(".flac")?"Flac":"Wav",time_reference:0,unsaved:false});

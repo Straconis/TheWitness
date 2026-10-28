@@ -329,7 +329,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       try{
         const session=await getSession(config.recordingPath,downloadSelection[1]!,interaction.guildID);
         if(session.state!=="completed"||!session.tracks.length)throw new UserError("This recording has no completed audio to download.");
-        await interaction.editOriginalMessage({content:downloads?`[Open your private download panel](${downloads.recordingLink(session.id)})\nChoose project and audio formats on that page. This link expires in 24 hours; share it only with your group.`:"Web downloads are not enabled on this host yet. Use /export to get a Discord attachment, or ask the host operator to enable the download website."});
+        await interaction.editOriginalMessage({content:downloads?`[Open your private download panel](${downloads.recordingLink(session.id)})\nRecording: <t:${Math.floor(Date.parse(session.startedAt)/1000)}:f> · ${session.channelName||session.channelID}\nSession: \`${session.id}\`\nChoose project and audio formats on that page. This link expires in 24 hours; share it only with your group.`:"Web downloads are not enabled on this host yet. Use /export to get a Discord attachment, or ask the host operator to enable the download website."});
       }catch(error){await interaction.editOriginalMessage({content:"This recording is unavailable in this server or has no completed audio to download."});}
       return;
     }
@@ -538,7 +538,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           return;
         }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
-        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,title:sourceSession.title,channelName:sourceSession.channelName,channelID:sourceSession.channelID},settings.downloadNaming??"date") }] });
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,guildName:sourceSession.guildName??interaction.guild?.name,guildID:sourceSession.guildID,title:sourceSession.title,channelName:sourceSession.channelName,channelID:sourceSession.channelID},settings.downloadNaming??"date") }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")
