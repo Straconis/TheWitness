@@ -1,3 +1,4 @@
+import type {ServerAccessStore} from "../storage/server-access";
 import {handleStartSoundError} from "../exports/start-sound";
 import { SessionSync } from "./sync";
 import type {SettingsStore} from "../storage/settings";
@@ -12,6 +13,9 @@ type Connector = () => Promise<Eris.VoiceConnection>;
 export const DEFAULT_RECONNECT_DELAYS = [1000,2000,4000,8000,15000,30000,30000,30000,60000,60000,60000];
 
 export class RecordingManager {
+ private serverAccess?:ServerAccessStore;
+ setServerAccess(access:ServerAccessStore):void{this.serverAccess=access;}
+ assertServerAllowed(id:string):void{this.serverAccess?.assertAllowed(id);}
  onStopped?: (session:RecordingSession)=>Promise<void>;
  onDurationWarning?: (session:RecordingSession,minutes:number) => Promise<void>;
  onDurationLimit?: (session:RecordingSession) => Promise<void>;
@@ -29,14 +33,16 @@ export class RecordingManager {
  }
  cancelReconnect(guildID:string):void{this.reconnecting.get(guildID)?.abort();}
  async start(guild:Eris.Guild,channelID:string,connection:Eris.VoiceConnection,connector?:Connector):Promise<RecordingSession>{
+  this.assertServerAllowed(guild.id);
   const existing=this.sessions.get(guild.id);
   if(existing){if(existing.channelID!==channelID)throw new Error("Stop the existing recording before changing channels.");return existing;}
   await assertDeploymentIdle(this.root);
   if(await this.diskCritical())throw Error("Disk space is critically low. Free up space before starting a recording.");
   if(this.shuttingDown)throw Error("The Witness is shutting down.");
   await assertDeploymentIdle(this.root);
+  this.assertServerAllowed(guild.id);
   const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,this.settings?.get(guild.id).recordingDurationHours,guild.name);
-  try{if(this.shuttingDown)throw Error("The Witness is shutting down.");await assertDeploymentIdle(this.root);this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
+  try{this.assertServerAllowed(guild.id);if(this.shuttingDown)throw Error("The Witness is shutting down.");await assertDeploymentIdle(this.root);this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
   session.onDurationWarning=async minutes=>{if(this.sessions.get(guild.id)===session)await this.onDurationWarning?.(session,minutes);};
   session.onDurationLimit=async()=>{

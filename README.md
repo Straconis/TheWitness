@@ -495,3 +495,17 @@ The owner admin page also shows live host CPU, memory, recording-disk usage, and
 Server managers can upload and enable a **Recording end sound** in `/dashboard` (WAV, FLAC, MP3 or Ogg; 5 MB, 0.2–10 seconds). It is off by default. Playback starts after recording capture closes and finishes before the bot leaves voice, so it is excluded from downloaded audio. Error/disconnect, low-disk, and shutdown stops skip it. Start and end sounds have independent settings.
 
 Matching completed exports are reused while their expected files remain intact, including after a restart. Changed processing settings, naming overrides, or missing files cause a fresh export. Cloud-upload and transcription requests retain their normal processing path. Reuse creates no extra audio copies and is available when disk space is critically low.
+
+The owner `/admin` page lists the Discord servers where the bot is installed, including names, IDs, member counts and access state. **Block access** persists across restarts and rejoining. It blocks new commands, automatic and manual recording starts, exports, and signed web access for that server. Active recordings and exports finish safely; Stop, status, and export cancellation remain available subject to existing server permissions. Saved recordings are preserved, and **Allow access** restores access without reinstalling the bot. Server managers cannot override the owner's restriction.
+
+#### Owner access without Discord
+
+Bookmark `/admin` on the bot's public website. From an existing private owner page, select **Create or replace backup key**, then save the one-time key in a password manager. The direct sign-in page uses this key without requiring Discord and creates an HttpOnly, SameSite=Strict cookie lasting one hour (Secure on HTTPS). Only the key hash is stored on the host. Replacing the key invalidates old keys and key-based sessions; private Discord links retain their own expiry. Sign out clears the browser's backup sign-in cookie.
+
+If no backup key was configured, or the key is lost and Discord is inaccessible, a host administrator can run the following as the bot's service user. It prints a new key once and does not require the bot to be running. Add `--rotate` to replace an existing key and invalidate its sessions.
+
+```sh
+node /opt/the-witness/scripts/owner-admin-key.cjs /var/lib/the-witness/recordings
+```
+
+Keep the key private; anyone with it has bot-owner access. Avoid putting it in URLs, source control, or support logs.

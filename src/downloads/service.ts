@@ -1,3 +1,5 @@
+import {OwnerLogin,ownerSignInPage} from "./owner-login";
+import {ServerAccessStore,AdminServer,SERVER_BLOCKED_MESSAGE} from "../storage/server-access";
 import {ServerLoad} from "../storage/server-load";
 import {adminPage} from "./admin-page";
 import type {BotStatusStore} from "../discord/bot-status";
@@ -52,6 +54,11 @@ const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": 
 
 export class DownloadService {
   private serverLoad?:ServerLoad;
+  private serverAccess?:ServerAccessStore;
+  private ownerServers?:()=>AdminServer[];
+  setOwnerServers(access:ServerAccessStore,provider:()=>AdminServer[]):void{this.serverAccess=access;this.ownerServers=provider;}
+  private adminServers(){return (this.ownerServers?.()??[]).map(server=>({...server,allowed:this.serverAccess?.allowed(server.id)??true})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));}
+  private ownerLogin?:OwnerLogin;
   private ownerStatus?:BotStatusStore;
   private applyOwnerStatus?:()=>void;
   setOwnerAdmin(store:BotStatusStore,apply:()=>void):void{this.ownerStatus=store;this.applyOwnerStatus=apply;}
@@ -100,6 +107,7 @@ export class DownloadService {
   }
   private async dashboard(request:import("node:http").IncomingMessage,response:ServerResponse,url:URL):Promise<void>{
     const guildID=url.pathname.slice(11),canManage=url.searchParams.get("manager")==="1";
+    if(this.serverAccess&&!this.serverAccess.allowed(guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
       const preview=url.searchParams.get("preview-start-sound");
@@ -192,16 +200,28 @@ export class DownloadService {
     response.setHeader("X-Content-Type-Options","nosniff");
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
+    const ownerLogin=this.ownerLogin??=new OwnerLogin(this.root,this.key,this.publicURL.startsWith("https:"));
+    if(url.pathname==="/admin"||url.pathname==="/admin/"){
+      if(request.method==="GET"||request.method==="HEAD"){
+        if(await ownerLogin.authorized(request.headers.cookie)){response.writeHead(303,{Location:"/admin/control"});response.end();return;}
+        return this.html(response,request.method==="HEAD"?"":ownerSignInPage(await ownerLogin.configured()));
+      }
+      if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
+      if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
+      if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
+      const body=await this.readBody(request,1024);if(body===undefined)return this.json(response,413,{error:"Request too large."});
+      try{if(!await ownerLogin.authenticate(JSON.parse(body).key))return this.json(response,ownerLogin.throttled()?429:403,{error:"Invalid owner backup key."});response.setHeader("Set-Cookie",await ownerLogin.cookie());return this.json(response,200,{signedIn:true});}catch{return this.json(response,400,{error:"Could not sign in."});}
+    }
     if(url.pathname==="/admin/control"){
-      if(!this.authorized(url,url.pathname))return this.json(response,403,{error:"Owner link is invalid or expired. Run /admin in Discord for a new private link."});
+      if(!this.authorized(url,url.pathname)&&!await ownerLogin.authorized(request.headers.cookie))return this.json(response,403,{error:"Owner link is invalid or expired. Sign in at /admin or request a new private link through Discord."});
       if(!this.ownerStatus||!this.applyOwnerStatus)return this.json(response,503,{error:"Owner admin is unavailable."});
-      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload()??{running:0,queued:0}}});
+      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload()??{running:0,queued:0}}});
       if(request.method==="GET"||request.method==="HEAD")return this.html(response,request.method==="HEAD"?"":adminPage(this.ownerStatus.get()));
       if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
       const body=await this.readBody(request,2048);if(body===undefined)return this.json(response,413,{error:"Request too large."});
-      try{await this.ownerStatus.update(JSON.parse(body));this.applyOwnerStatus();return this.json(response,200,{saved:true});}catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Could not save status."});}
+      try{const data=JSON.parse(body);if(data.action==="create-owner-key"){const key=await ownerLogin.createKey();response.setHeader("Set-Cookie",await ownerLogin.cookie());return this.json(response,200,{key});}if(data.action==="logout"){response.setHeader("Set-Cookie",ownerLogin.clearCookie());return this.json(response,200,{signedOut:true});}if(data.action==="server-access"){if(!this.serverAccess||!this.ownerServers)return this.json(response,503,{error:"Server access controls unavailable."});if(!this.ownerServers().some(server=>server.id===data.guildID))return this.json(response,404,{error:"Server is not in the bot’s current server list."});await this.serverAccess.setAllowed(data.guildID,data.allowed);return this.json(response,200,{saved:true});}if(data.action!==undefined)throw Error("Unknown owner action.");await this.ownerStatus.update(data);this.applyOwnerStatus();return this.json(response,200,{saved:true});}catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Could not save status."});}
     }
     if (["/assets/witness-icon.png","/favicon.ico","/apple-touch-icon.png"].includes(url.pathname)) {
       if(request.method!=="GET"&&request.method!=="HEAD")return this.error(response,405,"Method not allowed.");
@@ -220,6 +240,7 @@ export class DownloadService {
       if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
       if(!this.authorized(url,url.pathname))return this.error(response,403,"Sync pairing link is invalid or expired.");
       const guildID=url.pathname.split("/")[2]!;
+      if(this.serverAccess&&!this.serverAccess.allowed(guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
       const slate=this.manager?.syncSessions.get(guildID);
       const cues=(slate?.cues??[]).filter(cue=>cue.targetUTC>Date.now()-600000);
       return this.json(response,200,{version:1,serverUTC:Date.now(),cues});
@@ -247,6 +268,7 @@ export class DownloadService {
       }
       if(!this.queue)return this.error(response,503,"Downloads unavailable.");
       const metadata=JSON.parse(await readFile(path.join(this.root,id,"session.json"),"utf8"));
+      if(this.serverAccess&&!this.serverAccess.allowed(metadata.guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
       const saved=await getSession(this.root,id,metadata.guildID);
       if(saved.state!=="completed"||!saved.tracks.length)return this.error(response,400,"This recording has no completed audio tracks to download.");
       if(request.method==="GET")return this.html(response,recordingPage(saved,transcriptionReady(),await getServerIntro(this.root,saved.guildID,undefined,undefined,saved.channelID),backupMode(this.settings?.get(saved.guildID)??{}),await speechCleanupAvailable()));
@@ -273,6 +295,7 @@ export class DownloadService {
       if(request.method!=="GET"&&!(url.pathname.startsWith("/job/")&&request.method==="POST"))return this.error(response,405,"Method not allowed.");
       const id=url.pathname.split("/")[2]!;
       if(url.pathname.startsWith("/browser/")){
+        if(this.serverAccess&&this.liveSession(id)&&!this.serverAccess.allowed(this.liveSession(id)!.guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
         if(!this.liveSession(id))return this.error(response,404,"This recording session is no longer active.");
         return this.html(response,browserPage());
       }
@@ -284,6 +307,7 @@ export class DownloadService {
         try{const data=JSON.parse(body);if(data.action==="cancel"){await this.queue!.cancel(job.id,job.guildID);return this.json(response,200,{state:this.queue!.get(job.id)!.state});}if(data.action==="retry"){const next=await this.queue!.retry(job.id,job.guildID);const retryURL=new URL(this.jobLink(next.id));if(url.searchParams.get("mixed")==="1")retryURL.searchParams.set("mixed","1");return this.json(response,202,{url:retryURL.toString()});}return this.json(response,400,{error:"Unknown action."});}
         catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Job action failed."});}
       }
+      if(this.serverAccess&&!this.serverAccess.allowed(job.guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
       let result=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
       if(result&&url.searchParams.get("mixed")==="1"&&job.mix&&!["audition","audacity","soundcraft"].includes(job.format)){const target=new URL(result);target.pathname+="/mix."+(job.format==="aac"?"m4a":job.format);result=target.toString();}
       const exportURL=job.state==="completed"&&job.directory?this.link(job.sessionID,job.directory):undefined;
@@ -323,6 +347,7 @@ export class DownloadService {
     }
     const requestedNaming=url.searchParams.get("names");
     const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="date-channel"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
+    if(this.serverAccess){const source=JSON.parse(await readFile(path.join(this.root,parts[2]!,"session.json"),"utf8"));if(typeof source.guildID!=="string")throw Error("Missing recording server metadata.");if(!this.serverAccess.allowed(source.guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});}
     const filename = parts[4];
     if(!filename&&request.method==="GET"&&url.searchParams.get("view")==="editor"){
       const waves:Record<string,unknown>={};for(const track of manifest.tracks){const id=/^track-(\d+)\./.exec(track.file)?.[1];if(!id)throw Error("Invalid editor track.");waves[id]=await waveform(path.join(directory,track.file));}
@@ -409,7 +434,7 @@ export class DownloadService {
       catch{socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");return;}
       const id=url.pathname.split("/")[2] ?? "";
       const session=this.liveSession(id);
-      if(!/^\/browser\/[a-f0-9-]{36}$/i.test(url.pathname)||!session||!this.authorized(url,url.pathname)||this.sockets.clients.size>=100){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
+      if(!/^\/browser\/[a-f0-9-]{36}$/i.test(url.pathname)||!session||(this.serverAccess&&!this.serverAccess.allowed(session.guildID))||!this.authorized(url,url.pathname)||this.sockets.clients.size>=100){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
       if(request.headers.origin && request.headers.origin!==this.publicURL){socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");return;}
       if((this.guestCounts.get(id)??0)>=MAX_BROWSER_GUESTS){socket.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");return;}
       const token=url.searchParams.get("guest")??randomBytes(16).toString("hex"),username=(url.searchParams.get("name")??"Guest").replace(/[\x00-\x1f\x7f]/g,"").trim();
@@ -427,6 +452,7 @@ export class DownloadService {
         const timer=setInterval(()=>{if(!this.liveSession(id))ws.close(1000,"Recording stopped");},1000);timer.unref();
         ws.on("close",()=>clearInterval(timer));ws.on("error",()=>ws.close());
         ws.on("message",(raw,isBinary)=>{
+          if(this.serverAccess&&!this.serverAccess.allowed(session.guildID)){ws.close(1008,"Server access restricted");return;}
           const bytes=Buffer.isBuffer(raw)?raw:Buffer.from(raw as ArrayBuffer);
           if(!isBinary||bytes.length!==1924){ws.close(1008,"Invalid audio frame");return;}
           if(Date.now()-epoch>=5000){frames=0;epoch=Date.now();}if(++frames>500){ws.close(1008,"Audio rate exceeded");return;}

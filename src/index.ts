@@ -1,3 +1,4 @@
+import {ServerAccessStore} from "./storage/server-access";
 import {BotStatusStore} from "./discord/bot-status";
 import path from "node:path";
 import { transcriptionReadyAsync } from "./integrations/transcription-config";
@@ -23,12 +24,15 @@ async function main(): Promise<void> {
   });
 
   await settingsStore.load();
+  const serverAccess=new ServerAccessStore(path.join(config.recordingPath,"server-access.json"));await serverAccess.load();
+  recordings.setServerAccess(serverAccess);
   // Probe whisper-cli in the background so pages and export checks read a cached answer instead of waiting for it.
   void transcriptionReadyAsync();
   await initializeStartSound();
 
   await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
   const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>[settings.startSound?.customID,settings.endSound?.customID]).flat().filter((id):id is string=>!!id)));
+  exportQueue.setServerAccess(serverAccess);
   exportQueue.setSoundcraftBackupPolicy(guildID=>backupMode(settingsStore.get(guildID)));
   setStorageExportQueue(exportQueue);
   // Cleanup may reclaim space needed to persist recovery metadata, before workers start.
@@ -44,7 +48,7 @@ async function main(): Promise<void> {
   if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!,config.downloadHost); }
   const botStatus=new BotStatusStore(path.join(config.recordingPath,"bot-status.json"));
   await botStatus.load();
-  const client = createDiscordClient(downloads,exportQueue,botStatus);
+  const client = createDiscordClient(downloads,exportQueue,botStatus,serverAccess);
 
   let shuttingDown = false;
   const shutdown = async () => {

@@ -1,3 +1,4 @@
+import {ServerAccessStore,SERVER_BLOCKED_MESSAGE} from "../storage/server-access";
 import {BotStatusStore,statusActivities,isApplicationOwner} from "./bot-status";
 import { backupMode,resolveBackupProjects,ASK_CHOICE_REQUIRED } from "../exports/soundcraft-backup";
 import {playEndSound,playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
@@ -166,6 +167,7 @@ async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild
 async function joinVoiceChannel(
   client: Eris.Client, guild: Eris.Guild, channelID: string
 ): Promise<Eris.VoiceConnection> {
+  recordings.assertServerAllowed(guild.id);
   const session = recordings.sessions.get(guild.id);
   if (session && session.channelID !== channelID) {
     throw new UserError("Stop the existing recording before changing channels.");
@@ -173,6 +175,7 @@ async function joinVoiceChannel(
   const connection = await client.joinVoiceChannel(channelID, {
     opusOnly: true, selfDeaf: false, selfMute: false
   });
+  try{recordings.assertServerAllowed(guild.id);}catch(error){connection.disconnect();throw error;}
   activeVoiceChannels.set(guild.id, channelID);
   return connection;
 }
@@ -199,6 +202,7 @@ function leaveVoiceChannel(guild: Eris.Guild): boolean {
 
 /** Join and start recording; if this call joined but recording cannot start, leave instead of idling in voice. */
 async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID: string, title?: string): Promise<RecordingSession> {
+  recordings.assertServerAllowed(guild.id);
   const existing=recordings.sessions.get(guild.id);
   const wasConnected = client.voiceConnections.has(guild.id);
   const connection = await joinVoiceChannel(client, guild, channelID);
@@ -214,13 +218,14 @@ async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID:
   }
 }
 
-export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue, botStatus?:BotStatusStore): Eris.Client {
+export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue, botStatus?:BotStatusStore, serverAccess?:ServerAccessStore): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
     allowedMentions:{everyone:false,roles:false,users:false},
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
   recordings.onStopped=async session=>{const connection=client.voiceConnections.get(session.guildID),channel=client.guilds.get(session.guildID)?.channels.get(session.channelID);const canSpeak=!!(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak"));await playEndSound(connection,config.recordingPath,session.guildID,settingsStore.get(session.guildID).endSound,canSpeak);};
+  if(serverAccess){recordings.setServerAccess(serverAccess);exportQueue?.setServerAccess(serverAccess);downloads?.setOwnerServers(serverAccess,()=>[...[...client.guilds.values()].map(guild=>({id:guild.id,name:guild.name||"Unavailable server",memberCount:guild.memberCount??null,unavailable:guild.unavailable===true})),...[...client.unavailableGuilds.values()].filter(guild=>!client.guilds.has(guild.id)).map(guild=>({id:guild.id,name:"Unavailable server",memberCount:null,unavailable:true}))]);}
   const applyStatus=()=>{if(botStatus)client.editStatus("online",statusActivities(botStatus.get()));};
   if(botStatus)downloads?.setOwnerAdmin(botStatus,applyStatus);
   downloads?.setLiveNames?.((guildID,channelID)=>{const guild=client.guilds.get(guildID);return {guildName:guild?.name,channelName:channelID?guild?.channels.get(channelID)?.name:undefined};});
@@ -284,7 +289,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const guild = channel.guild;
     const settings = getSettings(guild.id);
 
-    if (!settings.autoJoin || (settings.autoJoinChannels!==undefined&&!settings.autoJoinChannels.includes(channel.id)) || !mayUseBot(settings,member.roles)) {
+    if ((serverAccess&&!serverAccess.allowed(guild.id)) || !settings.autoJoin || (settings.autoJoinChannels!==undefined&&!settings.autoJoinChannels.includes(channel.id)) || !mayUseBot(settings,member.roles)) {
       return;
     }
 
@@ -322,6 +327,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
         await interaction.editOriginalMessage({content:`[Open owner admin](${downloads.adminLink()})\nThis private owner link expires in one hour. Do not share it.`,allowedMentions:{parse:[]}});
       }catch(error){const body={content:commandErrorMessage(error),flags:64};if(interaction.acknowledged)await interaction.editOriginalMessage(body);else await interaction.createMessage(body);}
       return;
+    }
+    if(interaction.guildID&&serverAccess&&!serverAccess.allowed(interaction.guildID)){
+      const safeCommand=interaction.type===2&&["stop","status"].includes(interaction.data?.name);
+      const safeStop=interaction.type===3&&/^witness:stop:/.test(interaction.data?.custom_id??"");
+      const safeCancel=interaction.type===2&&interaction.data?.name==="exportjob"&&interaction.data.options?.some((option:any)=>option.name==="action"&&option.value==="cancel");
+      if(!safeCommand&&!safeStop&&!safeCancel){await interaction.createMessage({content:SERVER_BLOCKED_MESSAGE,flags:64});return;}
     }
     const wranglerSettings=interaction.guildID?settingsStore.get(interaction.guildID):undefined;
     // Help is informational and remains available even when bot controls are restricted.

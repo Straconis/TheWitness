@@ -1,3 +1,4 @@
+import type {ServerAccessStore} from "../storage/server-access";
 import {validateMixName} from "../downloads/names";
 import {assertSpeechCleanup,defaultAudioTool} from "./speech-cleanup";
 import {estimateStepRemaining,OverallExportProgress,OverallEstimate} from "./progress";
@@ -30,6 +31,8 @@ export interface ExportJob extends Extras {id:string;sessionID:string;guildID:st
 /** Like Craig's QUEUE_SIZE: how many exports run at once across every server; later jobs wait in order. */
 export function exportConcurrency(value=process.env.EXPORT_CONCURRENCY?.trim()):number{if(!value)return 1;const limit=Number(value);if(!Number.isInteger(limit)||limit<1||limit>16)throw new Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");return limit;}
 export class ExportQueue {
+ private serverAccess?:ServerAccessStore;
+ setServerAccess(access:ServerAccessStore):void{this.serverAccess=access;}
  private jobs=new Map<string,ExportJob>();private dispatching?:Promise<void>;private redispatch=false;private running=new Map<string,Promise<void>>();private stopped=false;private submissions:Promise<unknown>=Promise.resolve();private active=new Map<string,AbortController>();private saves=new Map<string,Promise<void>>();private deleting=new Set<string>();
  private accounts:CloudAccounts;
  private started=false;private diskPaused=false;private diskAborted=new Set<string>();private reservations=new Map<string,number>();private diskPausing?:Promise<void>;private diskGuard?:NodeJS.Timeout;private maintenanceTimer?:NodeJS.Timeout;
@@ -74,6 +77,7 @@ export class ExportQueue {
   try{return await this.register(sessionID,guildID,format,mix,extras,resolvedBackups,pins);}finally{for(const unpin of pins)unpin();}
  }
  private async register(sessionID:string,guildID:string,format:ExportFormat,mix:boolean,extras:Extras,resolvedBackups:boolean,pins:Array<()=>void>):Promise<ExportJob>{
+  this.serverAccess?.assertAllowed(guildID);
   extras={...extras,...resolveLoudness(extras),mixName:mix?validateMixName(extras.mixName):undefined};
   await assertDeploymentIdle(this.root);
   if(this.stopped)throw new UserError("Export service is stopping.");if(this.deleting.has(sessionID))throw new UserError("This recording is being deleted.");const session=await getSession(this.root,sessionID,guildID);if(session.state!=="completed")throw new UserError("Only completed recordings can be exported.");
@@ -114,6 +118,7 @@ export class ExportQueue {
 
   if(await this.diskCritical())throw new UserError("Disk space is critically low, so new exports are paused. Free up space first.");
   if(this.stopped)throw new UserError("Export service is stopping.");await assertDeploymentIdle(this.root);
+  this.serverAccess?.assertAllowed(guildID);
   const job:ExportJob={id:randomUUID(),sessionID,guildID,format,mix,state:"queued",createdAt:new Date().toISOString(),queueOrder:++this.sequence,...extras};await this.save(job);this.jobs.set(job.id,job);this.kick();return job;
  }
  private owned(id:string,guildID:string):ExportJob{const job=this.jobs.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");return job;}
@@ -169,6 +174,7 @@ export class ExportQueue {
   try{
    signal.throwIfAborted();const overall=new OverallExportProgress();
    let currentStage=job.stage!,stepSeconds:number|undefined,stepBegan=Date.now();const exportWork=()=>this.exporter(this.root,job.sessionID,{format:job.format,trackFormat:job.trackFormat,targetLUFS:job.targetLUFS,maxTruePeakDBTP:job.maxTruePeakDBTP,normalizeAudio:job.normalizeAudio,cleanupAudio:job.cleanupAudio,normalizeIntro:job.normalizeIntro,trimSilence:job.trimSilence,trimEndSilence:job.trimEndSilence,silenceSeconds:job.silenceSeconds,includeRaw:job.includeRaw,introID:job.introID,introScope:job.introScope,mix:job.mix,mixName:job.mixName,excludeFromMix:job.excludeFromMix,trimStart:job.trimStart,trimEnd:job.trimEnd,edits:job.edits,sourceExport:job.sourceExport,backupProjects:job.backupProjects,onPlan:plan=>overall.setPlan(plan),onProgress:(stage,totalSeconds,workID)=>{if(workID)overall.begin(workID,totalSeconds);if(!job.transcribe&&!job.upload)job.overallEstimate=overall.estimate();stepSeconds=totalSeconds;job.progress=undefined;currentStage=(this.sequentialWorkspace.has(job.id)?"Low-space export: ":"")+stage;job.stage=currentStage;},signal});
+   this.serverAccess?.assertAllowed(job.guildID);
    const workspace=this.sequentialWorkspace.get(job.id);
    const render=()=>workspace?withExportSpaceCheck(async bytes=>{
     signal.throwIfAborted();const current=await this.inspectSpace!();signal.throwIfAborted();
