@@ -1,23 +1,27 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { crc32 } from "node:zlib";
-import { packagedTrackNames } from "../downloads/names";
+import {packageFileData,packageNames} from "./package-names";
+import {ensureSpeakerProjectZip} from "./project-zip";
 
 /** ZIP STORE archives for bounded Discord attachments; no host zip utility needed. */
 export async function archiveExport(directory: string, limit: number): Promise<Buffer> {
   // Project ZIPs contain self-contained native projects or referenced editor media and must be delivered intact.
-  try{const project=path.join(directory,"project.zip"),info=await stat(project);if(info.size>limit)throw Error("Export is too large for a Discord attachment; the files remain saved on the host.");const bytes=await readFile(project);if(bytes.length!==info.size)throw Error("Export changed while creating download.");return bytes;}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+  try{const project=path.join(directory,"project.zip");await ensureSpeakerProjectZip(directory);const info=await stat(project);if(info.size>limit)throw Error("Export is too large for a Discord attachment; the files remain saved on the host.");const bytes=await readFile(project);if(bytes.length!==info.size)throw Error("Export changed while creating download.");return bytes;}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
   const chunks: Buffer[] = [], central: Buffer[] = [];
   let offset = 0, count = 0, total = 22, members = new Map<string,string>();
-  try { const manifest = JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")); if (Array.isArray(manifest.tracks) && manifest.tracks.every((track: any) => typeof track?.file === "string" && typeof track?.username === "string")) members = packagedTrackNames(manifest.tracks); }
+  try { members=packageNames(JSON.parse(await readFile(path.join(directory,"manifest.json"),"utf8"))); }
   catch { /* Without a readable manifest, members keep their on-disk names. */ }
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !/^(manifest\.json|notes\.json|session\.(sesx|aup3?|scraft)|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(entry.name)) continue;
+    if (!entry.isFile() || !/^(manifest\.json|notes\.json|session\.(sesx|aup3?|scraft)|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(entry.name)) continue;
+    if(/^(?:raw-)?track-\d+\./.test(entry.name)&&!members.has(entry.name))throw Error(`Speaker metadata is missing for ${entry.name}; refusing to package anonymous tracks.`);
     const name = Buffer.from(members.get(entry.name) ?? entry.name);
-    const size = (await stat(path.join(directory, entry.name))).size;
+    const diskSize=(await stat(path.join(directory,entry.name))).size;
+    if(total+diskSize+30+46+name.length*2>limit)throw new Error("Export is too large for a Discord attachment; the files remain saved on the host.");
+    const original=await readFile(path.join(directory,entry.name));if(original.length!==diskSize)throw new Error("Export changed while creating download.");
+    const data = packageFileData(entry.name,original,members),size=data.length;
     total += size + 30 + 46 + name.length * 2;
     if (total > limit || total > 0xffffffff || count >= 65535) throw new Error("Export is too large for a Discord attachment; the files remain saved on the host.");
-    const data = await readFile(path.join(directory, entry.name));
     if (data.length !== size) throw new Error("Export changed while creating download.");
     const crc = crc32(data);
     const local = Buffer.alloc(30);

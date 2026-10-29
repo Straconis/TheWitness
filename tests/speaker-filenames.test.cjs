@@ -33,3 +33,15 @@ test('native Audacity projects name every track after its speaker, and raw and D
   assert.deepEqual(zipNames(archive).filter(name=>name.endsWith('.ogg')).sort(),['Alice (2).ogg','Alice.ogg','太郎_Taro.ogg']);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+test('a new mixed Audition export uses the custom mix filename and speaker names in its packaged manifest',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'witness-new-custom-mix-'));
+ try{const session=await recording(root),output=await exportSession(root,session.id,{format:'audition',mix:true,mixName:'Campaign finale.wav',ffmpegPath:ffmpeg});
+  const info=python(`import zipfile,sys,json
+with zipfile.ZipFile(sys.argv[1]) as z:
+ assert z.testzip() is None
+ m=json.loads(z.read('manifest.json'));assert all(t['file'] in z.namelist() for t in m['tracks']);assert m['mix'] in z.namelist()
+ print(json.dumps({'mix':m['mix'],'names':z.namelist()}))`,path.join(output,'project.zip'));
+  assert.equal(info.mix,'Campaign finale.flac');assert.ok(info.names.includes('Alice.flac'));assert.ok(!info.names.some(name=>/^track-\d+\./.test(name)));
+  const internal=JSON.parse(await readFile(path.join(output,'manifest.json')));assert.equal(internal.mix,'mix.flac');assert.equal(internal.mixName,'Campaign finale.wav');
+ }finally{await rm(root,{recursive:true,force:true});}
+});

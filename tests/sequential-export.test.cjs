@@ -19,7 +19,7 @@ test('a failed per-step space check removes partial output and preserves the sou
 });
 test('ZIP packaging checks actual stored file sizes before opening its output',async()=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-exact-zip-'));
- try{await fs.writeFile(path.join(root,'track-1.flac'),Buffer.alloc(10000));let requested;
+ try{await fs.writeFile(path.join(root,'track-1.flac'),Buffer.alloc(10000));await fs.writeFile(path.join(root,'manifest.json'),JSON.stringify({tracks:[{file:'track-1.flac',username:'Alice'}]}));let requested;
  await assert.rejects(withExportSpaceCheck(async bytes=>{requested=bytes;throw Error('No ZIP space');},()=>writeProjectZip(root)),/No ZIP space/);assert.ok(requested>10000&&requested<11000);await assert.rejects(fs.stat(path.join(root,'project.zip')),{code:'ENOENT'});
  }finally{await fs.rm(root,{recursive:true,force:true});}
 });

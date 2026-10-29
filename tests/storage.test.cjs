@@ -43,7 +43,7 @@ test('bounded download ZIP can be extracted with intact filenames and checksums'
  try {
   const track=Buffer.from([0,1,2,255]);
   await writeFile(path.join(root,'track-1.ogg'),track);
-  await writeFile(path.join(root,'manifest.json'),'{}');
+  await writeFile(path.join(root,'manifest.json'),JSON.stringify({tracks:[{file:'track-1.ogg',username:'Alice'}]}));
   await writeFile(path.join(root,'mix.wav'),track);
   await writeFile(path.join(root,'notes.json'),'[]');
   await writeFile(path.join(root,'secret.txt'),'excluded');
@@ -51,9 +51,9 @@ test('bounded download ZIP can be extracted with intact filenames and checksums'
   await writeFile(path.join(root,'download.zip'),archive);
   const result = spawnSync('python3',['-c',`import zipfile,sys
 with zipfile.ZipFile(sys.argv[1]) as z:
- assert sorted(z.namelist()) == ['manifest.json','mix.wav','notes.json','track-1.ogg']
+ assert sorted(z.namelist()) == ['Alice.ogg','manifest.json','mix.wav','notes.json']
  assert z.testzip() is None
- assert z.read('track-1.ogg') == bytes([0,1,2,255])`,path.join(root,'download.zip')],{encoding:'utf8'});
+ assert z.read('Alice.ogg') == bytes([0,1,2,255])`,path.join(root,'download.zip')],{encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
   await assert.rejects(archiveExport(root,10),/too large/);
  } finally { await rm(root,{recursive:true,force:true}); }

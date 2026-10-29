@@ -67,10 +67,10 @@ test('speaker labels and ZIP member names keep speakers identifiable, unique and
 });
 test('individual downloads keep non-Latin, duplicate and uncut speaker names instead of generic track names',()=>{
  const named={...manifest,trim:undefined,title:undefined,tracks:[{file:'track-1.wav',username:'太郎'},{file:'track-2.wav',username:'Bob'},{file:'track-3.wav',username:'bob'}],rawTracks:[{file:'raw-track-1.flac',username:'太郎'}]};
- assert.equal(downloadName('track-1.wav',named,'date'),'2026-10-02_02-55-00_UTC_太郎.wav');
- assert.equal(downloadName('track-3.wav',named,'date'),'2026-10-02_02-55-00_UTC_bob_2.wav');
- assert.equal(downloadName('raw-track-1.flac',named,'date'),'2026-10-02_02-55-00_UTC_太郎_uncut.flac');
- assert.equal(downloadName('track-1.wav',named,'original'),'track-1.wav');
+ assert.equal(downloadName('track-1.wav',named,'date'),'太郎.wav');
+ assert.equal(downloadName('track-3.wav',named,'date'),'bob (2).wav');
+ assert.equal(downloadName('raw-track-1.flac',named,'date'),'太郎 (uncut).flac');
+ assert.equal(downloadName('track-1.wav',named,'original'),'太郎.wav');
 });
 test('web downloads send Unicode server/channel ZIP names and use live Discord names for older recordings',async()=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-naming-live-'));let service;
@@ -84,17 +84,17 @@ test('web downloads send Unicode server/channel ZIP names and use live Discord n
   const zip=new URL(page);zip.pathname+='/project.zip';
   assert.equal((await fetch(zip)).headers.get('content-disposition'),`attachment; filename="2026-10-02 - Cafe Crew - Lounge.zip"; filename*=UTF-8''2026-10-02%20-%20Caf%C3%A9%20Crew%20-%20Lounge.zip`);
   const track=new URL(page);track.pathname+='/track-1.wav';
-  assert.equal((await fetch(track)).headers.get('content-disposition'),`attachment; filename="2026-10-02_02-55-00_UTC_Zoe.wav"; filename*=UTF-8''2026-10-02_02-55-00_UTC_Zo%C3%AB.wav`);
+  assert.equal((await fetch(track)).headers.get('content-disposition'),`attachment; filename="Zoe.wav"; filename*=UTF-8''Zo%C3%AB.wav`);
  }finally{await service?.close();await rm(root,{recursive:true,force:true});}
 });
 
 test('emoji truncation preserves valid Unicode in individual download headers',()=>{
  const username='😀'.repeat(23)+'a😀';
  const file=downloadName('track-1.wav',{startedAt:manifest.startedAt,tracks:[{file:'track-1.wav',username}]},'date');
- assert.ok(file.endsWith('_'+username+'.wav'));
+ assert.equal(file,username+'.wav');
  assert.doesNotThrow(()=>contentDisposition('attachment',file));
- const long='😀'.repeat(49),truncated=downloadName('track-1.wav',{startedAt:manifest.startedAt,tracks:[{file:'track-1.wav',username:long}]},'date');
- assert.ok(truncated.endsWith('_'+'😀'.repeat(48)+'.wav'));
+ const long='😀'.repeat(81),truncated=downloadName('track-1.wav',{startedAt:manifest.startedAt,tracks:[{file:'track-1.wav',username:long}]},'date');
+ assert.equal(truncated,'😀'.repeat(50)+'.wav');assert.ok(Buffer.byteLength(truncated)<=255);
  assert.doesNotThrow(()=>contentDisposition('attachment',truncated));
 });
 test('reserved Windows basenames remain safe when a speaker includes dots',()=>{

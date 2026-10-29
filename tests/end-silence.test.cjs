@@ -30,7 +30,7 @@ test('project exports trim the same tail on all tracks, preserve originals/intro
  for(const file of ['track-1.flac','mix.flac']){const result=await findSilenceCuts([path.join(target,file)],new Set(),ffmpeg);assert.ok(Math.abs(result.duration-3.2)<.001,file);}
  assert.equal((await findSilenceCuts([path.join(target,'track-2.flac')],new Set(),ffmpeg)).duration,.2);
  const notes=JSON.parse(await readFile(path.join(target,'notes.json')));assert.deepEqual(notes.map(note=>note.text),['Internal quiet pause']);assert.ok(Math.abs(notes[0].seconds-1.7)<.001);
- assert.equal(manifest.syncCues.cues[0].exportSeconds,null);assert.ok((await readFile(path.join(target,'project.zip'))).includes(Buffer.from('raw-track-1.flac')));
+ assert.equal(manifest.syncCues.cues[0].exportSeconds,null);assert.ok((await readFile(path.join(target,'project.zip'))).includes(Buffer.from('Human (uncut).flac')));
  }finally{await rm(root,{recursive:true,force:true});}
 });
 test('end-trim jobs retain speaker selection, distinguish duplicates, and survive retry/restart',async()=>{

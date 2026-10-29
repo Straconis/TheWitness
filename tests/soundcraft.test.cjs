@@ -33,7 +33,7 @@ test('recording page keeps Soundcraft disabled after request failures and update
  const buttons=['soundcraft','wav'].map(format=>({dataset:{format,mixed:'false'},disabled:false,tagName:'BUTTON',textContent:format}));
  const notice={hidden:true},intro={checked:false,addEventListener:(name,fn)=>{refresh=fn;}},status={};
  const inputs={'#started':{dateTime:'2026-10-01T00:00:00Z'},'#intro':intro,'#soundcraft-warning':notice,'#status':status,'#expiry':{},'#target-lufs':{value:'-16',validity:{valid:true}},'#max-true-peak':{value:'-1',validity:{valid:true}},'#silence-seconds':{value:'30'},'#track':{value:''}};
- const document={querySelector:selector=>selector.startsWith('button[data-format="soundcraft"]')?buttons[0]:inputs[selector]??{checked:false},querySelectorAll:selector=>selector==='button[data-format]'?buttons:[]};
+ const document={querySelector:selector=>selector.startsWith('button[data-format="soundcraft"]')?buttons[0]:inputs[selector]??{checked:false,value:'',addEventListener(){}},querySelectorAll:selector=>selector==='button[data-format]'?buttons:[]};
  const context=vm.createContext({document,URL,location:{href:'https://example.com'},fetch:async()=>{throw Error('Download failed');}});
  vm.runInContext(script,context);assert.equal(buttons[0].disabled,false);
  intro.checked=true;refresh();assert.equal(buttons[0].disabled,true);assert.match(notice.textContent,/loads audio directly into RAM/);
