@@ -21,6 +21,11 @@ jobs:
       - name: Install build and audio tools
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config ffmpeg
       - run: npm ci
+      - name: Cache checksum-pinned audio sources
+        uses: actions/cache@v4
+        with:
+          path: work/portable/sources
+          key: audio-sources-${{ runner.os }}-${{ hashFiles('licenses/audio/sources.json') }}
       - name: Build and test
         run: |
           python3 scripts/prepare-audio-sources.py
