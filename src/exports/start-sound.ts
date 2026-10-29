@@ -67,3 +67,16 @@ export async function uploadStartSoundChunk(root:string,guild:string,data:any):P
   await writeFile(startSoundPath(root,guild,id),await readFile(output),{flag:"wx",mode:0o600});await writeFile(path.join(dir,id+".json"),JSON.stringify(sound),{flag:"wx",mode:0o600});return {id,sound};
  }finally{if(owns)processing=false;await rm(upload,{recursive:true,force:true});}
 }
+
+/** Recording is closed before this starts, so the notice is never captured. */
+export async function playEndSound(connection:any,root:string,guild:string,choice:GuildSettings["endSound"],canSpeak:boolean):Promise<void>{
+ if(choice?.mode!=="custom"||!choice.customID||!canSpeak||!connection||connection.playing)return;
+ const file=startSoundPath(root,guild,choice.customID);await validateOggOpus(file);
+ await new Promise<void>((resolve,reject)=>{
+  let timer:NodeJS.Timeout;const clear=()=>{clearTimeout(timer);connection.removeListener("end",end);connection.removeListener("error",fail);connection.removeListener("disconnect",end);};
+  const end=()=>{clear();resolve();},fail=(error:Error)=>{clear();reject(error);};
+  connection.once("end",end);connection.once("error",fail);connection.once("disconnect",end);
+  timer=setTimeout(()=>{clear();try{connection.stopPlaying();}catch{}resolve();},11000);timer.unref();
+  try{connection.play(file,{format:"ogg"});}catch(error){fail(error as Error);}
+ });
+}

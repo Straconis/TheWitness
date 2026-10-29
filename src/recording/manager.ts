@@ -12,6 +12,7 @@ type Connector = () => Promise<Eris.VoiceConnection>;
 export const DEFAULT_RECONNECT_DELAYS = [1000,2000,4000,8000,15000,30000,30000,30000,60000,60000,60000];
 
 export class RecordingManager {
+ onStopped?: (session:RecordingSession)=>Promise<void>;
  onDurationWarning?: (session:RecordingSession,minutes:number) => Promise<void>;
  onDurationLimit?: (session:RecordingSession) => Promise<void>;
  selfUserID?:string;
@@ -102,7 +103,9 @@ export class RecordingManager {
   this.cleanup.get(guildID)?.();this.cleanup.delete(guildID);
   const buffer=this.buffers.get(guildID);this.buffers.delete(guildID);let finalError=error;
   for(const packet of buffer?.flush()??[]){try{await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival);}catch(error){finalError??=error as Error;}}
-  try{await session.close(finalError);}finally{this.sessions.delete(guildID);}return session;
+  try{await session.close(finalError);}finally{this.sessions.delete(guildID);}
+  if(!finalError&&!this.shuttingDown&&session.stopReason!=="disconnected"&&session.stopReason!=="low-disk")try{await this.onStopped?.(session);}catch(error){console.warn("[End sound] Playback skipped:",error);}
+  return session;
  }
  /** Finalize independent servers together; a slow reconnect must not delay every stop. */
  async stopForLowDisk():Promise<void>{

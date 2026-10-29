@@ -1,5 +1,6 @@
+import {BotStatusStore,statusActivities,isApplicationOwner} from "./bot-status";
 import { backupMode,resolveBackupProjects,ASK_CHOICE_REQUIRED } from "../exports/soundcraft-backup";
-import {playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
+import {playEndSound,playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
 import {protectRecordingSpace} from "../exports/storage";
 import {UserError,commandErrorMessage} from "../errors";
 import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
@@ -82,6 +83,7 @@ async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild
       {type:1,name:"downloadnames",description:"Choose date, date + channel, or original ZIP names.",options:[{type:3,name:"style",description:"Naming style",required:true,choices:[{name:"Date only (UTC)",value:"date"},{name:"Date + channel (UTC)",value:"date-channel"},{name:"Original filenames",value:"original"}]}]},
       { type:1,name:"delete",description:"Permanently delete a saved recording and its exports.",options:[{type:3,name:"session",description:"Session ID to delete",required:true},{type:5,name:"confirm",description:"Confirm permanent deletion",required:true}] },
       { type:1,name:"webapp",description:"Get a private browser microphone link for the current recording." },
+      { type:1,name:"admin",description:"Open bot-wide owner administration (application owner only)." },
       { type:1,name:"dashboard",description:"Open the private recording dashboard for this server." },
       { type: 1, name: "recover", description: "Recover saved audio from an interrupted recording.", options: [{ type: 3, name: "session", description: "Interrupted session ID", required: true }] },
       { type: 1, name: "note", description: "Add a timestamped note to the current recording.", options: [{ type: 3, name: "text", description: "Your session note", required: true, max_length: 2000 }] },
@@ -212,12 +214,15 @@ async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID:
   }
 }
 
-export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue): Eris.Client {
+export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue, botStatus?:BotStatusStore): Eris.Client {
   const client = new Eris.Client(config.discordToken, {
     allowedMentions:{everyone:false,roles:false,users:false},
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
+  recordings.onStopped=async session=>{const connection=client.voiceConnections.get(session.guildID),channel=client.guilds.get(session.guildID)?.channels.get(session.channelID);const canSpeak=!!(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak"));await playEndSound(connection,config.recordingPath,session.guildID,settingsStore.get(session.guildID).endSound,canSpeak);};
+  const applyStatus=()=>{if(botStatus)client.editStatus("online",statusActivities(botStatus.get()));};
+  if(botStatus)downloads?.setOwnerAdmin(botStatus,applyStatus);
   downloads?.setLiveNames?.((guildID,channelID)=>{const guild=client.guilds.get(guildID);return {guildName:guild?.name,channelName:channelID?guild?.channels.get(channelID)?.name:undefined};});
   downloads?.setIntroChannels?.(guildID=>[...(client.guilds.get(guildID)?.channels.values()??[])].filter(channel=>channel.type===2).map(channel=>({id:channel.id,name:channel.name})));
 
@@ -256,6 +261,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const session=await startRecording(client,guild,rule.channelID,rule.title);await panels.ensure(rule.channelID,session).catch(error=>console.warn("[Schedule panel]",error));return session.id;
   },async guildID=>{try{await recordings.stop(guildID);}finally{const guild=client.guilds.get(guildID);if(guild)leaveVoiceChannel(guild);}await panels.update();});scheduleRunner=schedules;let schedulesStarted=false;
   client.on("ready", async () => {
+    applyStatus();
     console.log(
       `[Discord] Logged in as ${client.user.username} (${client.user.id})`
     );
@@ -307,6 +313,16 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   client.on("voiceChannelSwitch",(member,channel)=>{void autoJoin(member,channel);});
 
   client.on("interactionCreate", async (interaction: any) => {
+    if(interaction.type===2&&interaction.data?.name==="admin"){
+      try{
+        await interaction.defer(64);
+        if(!downloads||!botStatus)throw new UserError("Owner admin requires web downloads to be enabled by the host.");
+        const userID=interaction.member?.id??interaction.user?.id??"";
+        if(!isApplicationOwner(await client.getOAuthApplication(),userID))throw new UserError("Only the Discord application owner can open bot-wide admin settings.");
+        await interaction.editOriginalMessage({content:`[Open owner admin](${downloads.adminLink()})\nThis private owner link expires in one hour. Do not share it.`,allowedMentions:{parse:[]}});
+      }catch(error){const body={content:commandErrorMessage(error),flags:64};if(interaction.acknowledged)await interaction.editOriginalMessage(body);else await interaction.createMessage(body);}
+      return;
+    }
     const wranglerSettings=interaction.guildID?settingsStore.get(interaction.guildID):undefined;
     // Help is informational and remains available even when bot controls are restricted.
     const readingHelp=(interaction.type===2&&interaction.data?.name==="help")||(interaction.type===3&&interaction.data?.custom_id==="witness:help");

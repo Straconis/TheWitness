@@ -1,3 +1,5 @@
+import {BotStatusStore} from "./discord/bot-status";
+import path from "node:path";
 import { transcriptionReadyAsync } from "./integrations/transcription-config";
 import { backupMode } from "./exports/soundcraft-backup";
 import {initializeStartSound} from "./exports/start-sound";
@@ -26,7 +28,7 @@ async function main(): Promise<void> {
   await initializeStartSound();
 
   await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
-  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>settings.startSound?.customID).filter((id):id is string=>!!id)));
+  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>[settings.startSound?.customID,settings.endSound?.customID]).flat().filter((id):id is string=>!!id)));
   exportQueue.setSoundcraftBackupPolicy(guildID=>backupMode(settingsStore.get(guildID)));
   setStorageExportQueue(exportQueue);
   // Cleanup may reclaim space needed to persist recovery metadata, before workers start.
@@ -40,7 +42,9 @@ async function main(): Promise<void> {
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
   if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!,config.downloadHost); }
-  const client = createDiscordClient(downloads,exportQueue);
+  const botStatus=new BotStatusStore(path.join(config.recordingPath,"bot-status.json"));
+  await botStatus.load();
+  const client = createDiscordClient(downloads,exportQueue,botStatus);
 
   let shuttingDown = false;
   const shutdown = async () => {

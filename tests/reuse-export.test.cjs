@@ -1,0 +1,14 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),{randomUUID}=require('node:crypto');
+const {RecordingSession}=require('../dist/recording/session'),{ExportQueue}=require('../dist/exports/jobs');
+const until=async check=>{for(let i=0;i<400;i++){if(check())return;await new Promise(r=>setTimeout(r,10));}throw Error('Timeout');};
+test('completed matching exports are reused without new audio or disk copies; changed or missing results render fresh',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-reuse-'));let queue,calls=0,critical=false;
+ try{const source=await RecordingSession.create(root,'guild','voice');await source.append(Buffer.from([0xf8,0xff,0xfe]),'user','User',0,1n);await source.close();
+ const exporter=async(base,id,options)=>{calls++;const dir=path.join(base,id,'export-'+randomUUID()),metadata=JSON.parse(await fs.readFile(path.join(base,id,'session.json'),'utf8'));await fs.mkdir(dir);await fs.writeFile(path.join(dir,'track-1.flac'),'audio');await fs.writeFile(path.join(dir,'mix.flac'),'mix');await fs.writeFile(path.join(dir,'project.zip'),'zip');await fs.writeFile(path.join(dir,'manifest.json'),JSON.stringify({sessionID:id,startedAt:metadata.startedAt,title:metadata.title,tracks:[{file:'track-1.flac',username:'User'}],mix:options.mix?'mix.flac':undefined}));return dir;};
+ queue=new ExportQueue(root,exporter,()=>critical);await queue.load();const first=await queue.enqueue(source.id,'guild','audition',true);await until(()=>first.state==='completed');const again=await queue.enqueue(source.id,'guild','audition',true);assert.equal(again.id,first.id);assert.equal(calls,1);critical=true;assert.equal((await queue.enqueue(source.id,'guild','audition',true)).id,first.id);await assert.rejects(queue.enqueue(source.id,'guild','audition',true,{mixName:'Changed'}),/critically low/);critical=false;assert.equal((await fs.readdir(path.join(root,source.id))).filter(n=>n.startsWith('export-')).length,1);
+ await queue.close();queue.releaseIntroReferences();queue=new ExportQueue(root,exporter,()=>critical);await queue.load();assert.equal((await queue.enqueue(source.id,'guild','audition',true)).id,first.id);assert.equal(calls,1);
+ await fs.rm(path.join(root,source.id,first.directory,'project.zip'));const missing=await queue.enqueue(source.id,'guild','audition',true);assert.notEqual(missing.id,first.id);await until(()=>missing.state==='completed');assert.equal(calls,2);
+ const changed=await queue.enqueue(source.id,'guild','audition',true,{mixName:'Finale'});assert.notEqual(changed.id,missing.id);await until(()=>changed.state==='completed');assert.equal(calls,3);
+ await assert.rejects(queue.enqueue(source.id,'other-guild','audition',true));
+ }finally{await queue?.close();queue?.releaseIntroReferences();await fs.rm(root,{recursive:true,force:true});}
+});

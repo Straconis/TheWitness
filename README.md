@@ -483,3 +483,15 @@ The preparation page shows both a current-pass estimate and an approximate range
 **Clean up speech** is off by default on the recording download page and in the editor. Its gentle preset removes low rumble, reduces steady noise by up to 6 dB, adds a small voice-presence adjustment, and limits peaks. Cleanup preserves timing, including compensation for the noise filter's latency. Intro music, the dedicated sync-cue track, source recordings, and included raw originals are unchanged. Cleanup runs before original-export loudness matching and is included in the overall work estimate. An editor source that already has cleanup is not cleaned a second time. The option adds processing time and cannot restore missing or clipped words.
 
 The release workflow builds its portable audio tool from the checksum-pinned upstream sources, tests that exact tool, and includes it in the versioned release. Existing whisper/model files and explicit custom audio-tool overrides remain in place. A custom tool must provide highpass, equalizer, afftdn and latency-compensated alimiter support for the cleanup checkbox to be available.
+
+### Owner administration
+
+Run `/admin` in a Discord server to request a private, one-hour owner admin link. The bot verifies the Discord application's owner (or its owning team's owner); Manage Server permission alone does not grant access. Keep the link private. Web downloads must be configured.
+
+The Discord status panel enables or disables the bot-wide message, chooses Custom message, Playing, Listening to, Watching, or Competing in, and previews the text. Save applies it without restarting; disabling clears the activity while keeping the bot online. Settings persist in `bot-status.json` in the recording directory and are restored on reconnect/restart. Status messages start disabled.
+
+The owner admin page also shows live host CPU, memory, recording-disk usage, and recording/export counts. Metrics refresh every five seconds while the page is visible; they require the same private owner link.
+
+Server managers can upload and enable a **Recording end sound** in `/dashboard` (WAV, FLAC, MP3 or Ogg; 5 MB, 0.2–10 seconds). It is off by default. Playback starts after recording capture closes and finishes before the bot leaves voice, so it is excluded from downloaded audio. Error/disconnect, low-disk, and shutdown stops skip it. Start and end sounds have independent settings.
+
+Matching completed exports are reused while their expected files remain intact, including after a restart. Changed processing settings, naming overrides, or missing files cause a fresh export. Cloud-upload and transcription requests retain their normal processing path. Reuse creates no extra audio copies and is available when disk space is critically low.

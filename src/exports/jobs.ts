@@ -21,7 +21,7 @@ import { existsSync } from "node:fs";
 import { transcribeExport } from "../integrations/transcription";
 import { uploadFile, CloudProvider } from "../integrations/cloud";
 import { randomUUID } from "node:crypto";
-import { mkdir,readdir,readFile,writeFile,rename,rm,stat } from "node:fs/promises";
+import { mkdir,readdir,readFile,writeFile,rename,rm,stat,lstat } from "node:fs/promises";
 import path from "node:path";
 import { exportSession, ExportFormat } from "./export";
 import { getSession,sessionIDPattern } from "../storage/sessions";
@@ -76,7 +76,7 @@ export class ExportQueue {
  private async register(sessionID:string,guildID:string,format:ExportFormat,mix:boolean,extras:Extras,resolvedBackups:boolean,pins:Array<()=>void>):Promise<ExportJob>{
   extras={...extras,...resolveLoudness(extras),mixName:mix?validateMixName(extras.mixName):undefined};
   await assertDeploymentIdle(this.root);
-  if(this.stopped)throw new UserError("Export service is stopping.");if(await this.diskCritical())throw new UserError("Disk space is critically low, so new exports are paused. Free up space first.");if(this.deleting.has(sessionID))throw new UserError("This recording is being deleted.");const session=await getSession(this.root,sessionID,guildID);if(session.state!=="completed")throw new UserError("Only completed recordings can be exported.");
+  if(this.stopped)throw new UserError("Export service is stopping.");if(this.deleting.has(sessionID))throw new UserError("This recording is being deleted.");const session=await getSession(this.root,sessionID,guildID);if(session.state!=="completed")throw new UserError("Only completed recordings can be exported.");
   if(!["ogg","wav","flac","mp3","aac","audition","audacity","soundcraft"].includes(format))throw new UserError("Invalid export format.");
   if(extras.cleanupAudio!==undefined&&typeof extras.cleanupAudio!=="boolean")throw new UserError("Invalid speech cleanup option.");if(extras.cleanupAudio)await assertSpeechCleanup();
   silenceSeconds(extras.silenceSeconds??30);if(extras.sourceExport&&(extras.includeRaw||extras.trimSilence||extras.trimEndSilence))throw new UserError("Choose raw recordings and silence trimming on the original recording download page.");
@@ -94,7 +94,26 @@ export class ExportQueue {
   if(extras.transcribe){const status=transcriptionStatus();if(status==="checking")throw new UserError("Transcription is still being checked on this host. Try again in a few seconds.");if(status!=="ready")throw new UserError("Configure a local transcription executable and model first.");}if(extras.upload&&!["dropbox","google","onedrive","box"].includes(extras.upload))throw new UserError("Invalid cloud provider.");if(extras.upload)this.assertUploadAllowed(guildID);if(extras.upload&&!await this.accounts.configured(extras.upload))throw new UserError("Configure the cloud account first.");
   if(this.deleting.has(sessionID))throw new UserError("This recording is being deleted.");
   if(this.stopped)throw new UserError("Export service is stopping.");await assertDeploymentIdle(this.root);
-  const existing=[...this.jobs.values()].find(job=>job.sessionID===sessionID&&job.format===format&&job.mix===mix&&job.mixName===extras.mixName&&(job.targetLUFS??TARGET_LUFS)===extras.targetLUFS&&(job.maxTruePeakDBTP??TRUE_PEAK_DBTP)===extras.maxTruePeakDBTP&&!!job.normalizeAudio===!!extras.normalizeAudio&&!!job.cleanupAudio===!!extras.cleanupAudio&&!!job.normalizeIntro===!!extras.normalizeIntro&&!!job.trimSilence===!!extras.trimSilence&&!!job.trimEndSilence===!!extras.trimEndSilence&&(job.silenceSeconds??30)===(extras.silenceSeconds??30)&&!!job.includeRaw===!!extras.includeRaw&&job.introID===extras.introID&&(job.introScope??"server")===(extras.introScope??"server")&&JSON.stringify(job.excludeFromMix??[])===JSON.stringify(extras.excludeFromMix??[])&&job.trackFormat===extras.trackFormat&&job.transcribe===extras.transcribe&&job.upload===extras.upload&&job.trimStart===extras.trimStart&&job.trimEnd===extras.trimEnd&&job.sourceExport===extras.sourceExport&&JSON.stringify(job.edits)===JSON.stringify(extras.edits)&&JSON.stringify(job.backupProjects)===JSON.stringify(extras.backupProjects)&&["queued","running"].includes(job.state));if(existing)return existing;
+  const matches=(job:ExportJob)=>job.sessionID===sessionID&&job.format===format&&job.mix===mix&&job.mixName===extras.mixName&&(job.targetLUFS??TARGET_LUFS)===extras.targetLUFS&&(job.maxTruePeakDBTP??TRUE_PEAK_DBTP)===extras.maxTruePeakDBTP&&!!job.normalizeAudio===!!extras.normalizeAudio&&!!job.cleanupAudio===!!extras.cleanupAudio&&!!job.normalizeIntro===!!extras.normalizeIntro&&!!job.trimSilence===!!extras.trimSilence&&!!job.trimEndSilence===!!extras.trimEndSilence&&(job.silenceSeconds??30)===(extras.silenceSeconds??30)&&!!job.includeRaw===!!extras.includeRaw&&job.introID===extras.introID&&(job.introScope??"server")===(extras.introScope??"server")&&JSON.stringify(job.excludeFromMix??[])===JSON.stringify(extras.excludeFromMix??[])&&job.trackFormat===extras.trackFormat&&job.transcribe===extras.transcribe&&job.upload===extras.upload&&job.trimStart===extras.trimStart&&job.trimEnd===extras.trimEnd&&job.sourceExport===extras.sourceExport&&JSON.stringify(job.edits)===JSON.stringify(extras.edits)&&JSON.stringify(job.backupProjects)===JSON.stringify(extras.backupProjects);
+  const existing=[...this.jobs.values()].find(job=>matches(job)&&["queued","running"].includes(job.state));if(existing)return existing;
+  // Reuse an intact immutable result: no new audio, temporary workspace, or cloud side effects.
+  if(!extras.upload&&!extras.transcribe)for(const cached of [...this.jobs.values()].reverse())if(matches(cached)&&cached.state==="completed"&&cached.directory&&/^export-[a-f0-9-]{36}$/i.test(cached.directory)){
+   const directory=path.join(this.root,sessionID,cached.directory);
+   try{
+    const manifest=JSON.parse(await readFile(path.join(directory,"manifest.json"),"utf8"));
+    if(manifest.sessionID!==sessionID||manifest.startedAt!==session.startedAt||manifest.title!==session.title||!Array.isArray(manifest.tracks))continue;
+    if(extras.includeRaw&&!Array.isArray(manifest.rawTracks))continue;
+    const files=[...manifest.tracks,...(extras.includeRaw?manifest.rawTracks??[]:[])].map((track:{file:string})=>track.file);
+    if(mix){if(typeof manifest.mix!=="string")continue;files.push(manifest.mix);}
+    if(["audition","audacity","soundcraft"].includes(format)||extras.includeRaw)files.push("project.zip");
+    if(!files.length||files.some((file:unknown)=>typeof file!=="string"||path.basename(file)!==file))continue;
+    const info=await Promise.all(files.map((file:string)=>lstat(path.join(directory,file))));if(info.some(file=>!file.isFile()||file.size===0))continue;
+    return cached;
+   }catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")console.warn("[Export] Cached result unavailable; preparing a fresh export.");}
+  }
+
+  if(await this.diskCritical())throw new UserError("Disk space is critically low, so new exports are paused. Free up space first.");
+  if(this.stopped)throw new UserError("Export service is stopping.");await assertDeploymentIdle(this.root);
   const job:ExportJob={id:randomUUID(),sessionID,guildID,format,mix,state:"queued",createdAt:new Date().toISOString(),queueOrder:++this.sequence,...extras};await this.save(job);this.jobs.set(job.id,job);this.kick();return job;
  }
  private owned(id:string,guildID:string):ExportJob{const job=this.jobs.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");return job;}
@@ -104,6 +123,7 @@ export class ExportQueue {
  busy(sessionID:string):boolean{return [...this.jobs.values()].some(job=>job.sessionID===sessionID&&["queued","running","cancelling"].includes(job.state));}
  /** Intro IDs any known job uses; cleanup and custom-intro pruning keep these. */
  introReferences():Set<string>{return new Set([...this.jobs.values()].map(job=>job.introID).filter((id):id is string=>!!id));}
+ workload():{running:number;queued:number}{const jobs=[...this.jobs.values()];return {running:jobs.filter(job=>["running","cancelling"].includes(job.state)).length,queued:jobs.filter(job=>job.state==="queued").length};}
  get(id:string):ExportJob|undefined{return this.jobs.get(id);}
  /** Oldest first, as Craig orders its queue, so a restart or retry cannot reshuffle waiting servers. */
  private queued():ExportJob[]{return [...this.jobs.values()].filter(job=>job.state==="queued").sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt)||(a.queueOrder??0)-(b.queueOrder??0)||a.id.localeCompare(b.id));}
