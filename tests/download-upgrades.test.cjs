@@ -5,8 +5,8 @@ const {downloadName}=require('../dist/downloads/names');
 const {RecordingSession}=require('../dist/recording/session');
 test('recording date, server and room determine ZIP names regardless of current date',()=>{
  const m={startedAt:'2026-10-27T17:00:00-04:00',guildName:'My Server',channelName:'General Voice'};
- assert.equal(downloadName('project.zip',m,'date'),'2026-10-27-My-Server-General-Voice.zip');
- assert.equal(downloadName('project.zip',m,'date-channel'),'2026-10-27-My-Server-General-Voice.zip');
+ assert.equal(downloadName('project.zip',m,'date'),'2026-10-27 - My Server - General Voice.zip');
+ assert.equal(downloadName('project.zip',m,'date-channel'),'2026-10-27 - My Server - General Voice.zip');
  assert.equal(downloadName('project.zip',m,'original'),'project.zip');
  const tracks=[{file:'track-1.wav',username:'Alice'},{file:'track-2.wav',username:'Alice'}];
  assert.notEqual(downloadName(tracks[0].file,{...m,tracks},'date'),downloadName(tracks[1].file,{...m,tracks},'date'));

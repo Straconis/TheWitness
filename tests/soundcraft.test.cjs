@@ -64,7 +64,7 @@ test('Soundcraft exports WAV/FLAC sessions and rendered editor projects with por
   for(const trackFormat of ['wav','flac']){
    const output=await exportSession(root,session.id,{format:'soundcraft',trackFormat,mix:true});
    const manifest=JSON.parse(await readFile(path.join(output,'manifest.json'))),doc=JSON.parse(await readFile(path.join(output,'session.scraft')));
-   assert.equal(manifest.format,'soundcraft');assert.equal(manifest.project,'project.zip');assert.equal(doc.sources[0].path,'track-1.'+trackFormat);
+   assert.equal(manifest.format,'soundcraft');assert.equal(manifest.project,'project.zip');assert.equal(doc.sources[0].path,'Alice & friends 🎧.'+trackFormat);
    assert.equal(doc.sources[0].frames,19200);assert.equal(doc.tracks[0].name,'Alice & friends 🎧');assert.equal(doc.tracks[0].playlists[0].clips[0].start,0);
    assert.equal(doc.tracks.length,1);assert.equal(doc.markers.length,1);assert.ok(doc.next_id>doc.markers[0].id);
    const result=spawnSync('python3',['-c','import zipfile,sys,json\nz=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None\ns=json.loads(z.read("session.scraft"));assert all(x["path"] in z.namelist() for x in s["sources"])',path.join(output,'project.zip')],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);

@@ -218,6 +218,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
+  downloads?.setLiveNames?.((guildID,channelID)=>{const guild=client.guilds.get(guildID);return {guildName:guild?.name,channelName:channelID?guild?.channels.get(channelID)?.name:undefined};});
   downloads?.setIntroChannels?.(guildID=>[...(client.guilds.get(guildID)?.channels.values()??[])].filter(channel=>channel.type===2).map(channel=>({id:channel.id,name:channel.name})));
 
   const panelContext=(session:{guildID:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined};};
@@ -538,7 +539,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           return;
         }
         const archive = await archiveExport(directory, 8 * 1024 * 1024);
-        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,guildName:sourceSession.guildName??interaction.guild?.name,guildID:sourceSession.guildID,title:sourceSession.title,channelName:sourceSession.channelName,channelID:sourceSession.channelID},settings.downloadNaming??"date") }] });
+        await interaction.editOriginalMessage({ content: "Your speaker tracks and participant manifest are ready.", attachments: [{ file: archive, filename: downloadName(`witness-${settings.downloadNaming==="original"?id:format}.zip`,{startedAt:sourceSession.startedAt,guildName:sourceSession.guildName??interaction.guild?.name,guildID:sourceSession.guildID,title:sourceSession.title,channelName:sourceSession.channelName||interaction.guild?.channels.get(sourceSession.channelID)?.name,channelID:sourceSession.channelID},settings.downloadNaming??"date") }] });
       } catch (error) {
         console.error("[Export]", error);
         await interaction.editOriginalMessage({ content: error instanceof Error && error.message.startsWith("Export is too large")

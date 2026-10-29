@@ -4,13 +4,14 @@ import path from "node:path";
 import {projectSamples} from "./project-audio";
 import {defaultAudioTool} from "./speech-cleanup";
 import {UserError} from "../errors";
+import {speakerLabels} from "../downloads/names";
 import type {NativeProjectInput,NativeTrackInput} from "./aup3-worker";
 export interface NativeAudacityResult {file:string;bytes:number;blocks:number;silentBlocks:number;reusedBlocks:number}
 export async function writeNativeAudacity(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>=[],options:{project?:string;ffmpegPath?:string;signal?:AbortSignal;onProgress?:(stage:string,seconds:number,totalSeconds:number)=>void}={}):Promise<NativeAudacityResult>{
- options.signal?.throwIfAborted();if(!tracks.length)throw Error("Native Audacity projects need at least one track.");if(notes.some(n=>!Number.isFinite(n.seconds)||n.seconds<0||typeof n.text!=="string"))throw Error("Invalid native project note.");const project=options.project??"session";if(!/^[A-Za-z0-9-]+$/.test(project))throw Error("Invalid Audacity project name.");const file=project+".aup3",inputs:NativeTrackInput[]=[];
+ options.signal?.throwIfAborted();if(!tracks.length)throw Error("Native Audacity projects need at least one track.");if(notes.some(n=>!Number.isFinite(n.seconds)||n.seconds<0||typeof n.text!=="string"))throw Error("Invalid native project note.");const project=options.project??"session";if(!/^[A-Za-z0-9-]+$/.test(project))throw Error("Invalid Audacity project name.");const file=project+".aup3",inputs:NativeTrackInput[]=[],labels=speakerLabels(tracks);
  for(const track of tracks){if(path.basename(track.file)!==track.file)throw Error("Invalid native project media path.");const filename=path.join(directory,track.file),frames=await projectSamples(filename),source=await open(filename,"r"),header=Buffer.alloc(128);let int16=false;
   try{await source.read(header,0,header.length,0);if(header.toString("ascii",0,4)==="fLaC")int16=Number(header.readBigUInt64BE(18)>>36n&31n)+1<=16;else{const fmt=header.indexOf(Buffer.from("fmt "),12);int16=fmt>=0&&fmt+24<=header.length&&header.readUInt16LE(fmt+22)===16;}}
-  finally{await source.close();}inputs.push({file:filename,username:track.username,frames,format:int16?"int16":"float"});
+  finally{await source.close();}inputs.push({file:filename,username:labels.get(track.file)!,frames,format:int16?"int16":"float"});
  }
  const reserveGiB=Number(process.env.LOW_DISK_WARNING_GIB?.trim()||1);if(!Number.isFinite(reserveGiB)||reserveGiB<=0)throw Error("Invalid recording disk reserve.");
  const data:NativeProjectInput={output:path.join(directory,file),tracks:inputs,notes,ffmpeg:options.ffmpegPath??defaultAudioTool(),reserveBytes:reserveGiB*1024**3};

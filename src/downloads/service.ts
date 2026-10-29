@@ -15,7 +15,7 @@ import { editorPage } from "./editor-page";
 import { waveform } from "./waveforms";
 import { validateEdits } from "../exports/edits";
 import { CloudAccounts } from "../integrations/accounts";
-import { downloadName, DownloadNaming } from "./names";
+import { contentDisposition, downloadName, DownloadNaming } from "./names";
 import { renameSession } from "../storage/titles";
 import { StorageMonitor } from "../storage/space";
 import { WebSocketServer } from "ws";
@@ -52,6 +52,9 @@ export class DownloadService {
   private activeGuests=new Map<string,Set<string>>();
   private introChannels?: (guildID:string)=>Array<{id:string;name:string}>;
   setIntroChannels(provider:(guildID:string)=>Array<{id:string;name:string}>):void{this.introChannels=provider;}
+  private liveNames?: (guildID:string,channelID?:string)=>{guildName?:string;channelName?:string};
+  /** Current Discord names for recordings saved before server or channel names were recorded. */
+  setLiveNames(provider:(guildID:string,channelID?:string)=>{guildName?:string;channelName?:string}):void{this.liveNames=provider;}
   private space?:StorageMonitor;
   private queue?:ExportQueue;
   private settings?:SettingsStore;
@@ -274,6 +277,7 @@ export class DownloadService {
     if(manifest.guildID&&(!manifest.guildName||!manifest.channelName||!manifest.channelID)){
       try{const source=await getSession(this.root,parts[2]!,manifest.guildID);manifest.guildName??=source.guildName;manifest.channelName??=source.channelName;manifest.channelID??=source.channelID;}
       catch{ /* Existing authorized downloads remain usable if source metadata is unavailable. */ }
+      if(!manifest.guildName||!manifest.channelName){try{const live=this.liveNames?.(manifest.guildID,manifest.channelID);manifest.guildName||=live?.guildName;manifest.channelName||=live?.channelName;}catch{ /* Saved IDs remain the fallback. */ }}
     }
     const requestedNaming=url.searchParams.get("names");
     const naming:DownloadNaming=requestedNaming==="date"||requestedNaming==="date-channel"||requestedNaming==="original"?requestedNaming:(this.settings&&manifest.guildID?this.settings.get(manifest.guildID).downloadNaming:undefined)??"date";
@@ -314,7 +318,7 @@ export class DownloadService {
       const namesToggle=`<p>ZIP download names: ${namingOptions.map(([style,label])=>{const search=new URLSearchParams(downloadSearch);search.set("names",style);return style===naming?`<strong>${label}</strong>`:`<a href="${route}?${escapeHTML(search.toString())}">${label}</a>`;}).join(" · ")}</p>`;
       if(manifest.rawTracks&&(!Array.isArray(manifest.rawTracks)||!manifest.rawTracks.every((track:any)=>/^raw-track-\d+\.flac$/.test(track.file)&&typeof track.username==="string")))throw Error("Invalid original track manifest.");
       const links = manifest.tracks.map((track: any) => `<li><a href="${route}/${track.file}${query}">${escapeHTML(track.username)}</a> <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small><br><audio controls preload="metadata" src="${route}/${track.file}${query}&amp;preview=1"></audio></li>`).join("");
-      const rawLinks=(manifest.rawTracks??[]).map((track:any)=>`<li><a href="${route}/${escapeHTML(track.file)}${query}">Uncut original: ${escapeHTML(track.username)}</a> (FLAC)</li>`).join("");
+      const rawLinks=(manifest.rawTracks??[]).map((track:any)=>`<li><a href="${route}/${escapeHTML(track.file)}${query}">Uncut original: ${escapeHTML(track.username)}</a> (FLAC) <small>${escapeHTML(downloadName(track.file,manifest,naming))}</small></li>`).join("");
       let backups:ReturnType<typeof validateSavedBackups>;try{backups=validateSavedBackups(manifest.backupProjects,manifest.format);}catch{backups=undefined;}
       const extras = [[manifest.project,backups?.length?`Download project (ZIP): Soundcraft session plus optional ${backupLabel(backups)} backup project${backups.length>1?"s":""} for Soundcraft testing`:"Download project (ZIP)"],[manifest.mix,"Mixed session audio"],[manifest.notes,"Session notes"],...(manifest.transcripts??[]).map((file:string)=>[file,file])].filter(([file]) => file).map(([file,label]) => `<li><a href="${route}/${file}${query}">${label}</a></li>`).join("");
       let excerptDuration=NaN;
@@ -342,7 +346,7 @@ export class DownloadService {
       }
       response.setHeader("Accept-Ranges","bytes");
       response.setHeader("Content-Length",String(Math.max(0,end-start+1)));
-      response.setHeader("Content-Disposition",`${url.searchParams.get("preview")==="1"?"inline":"attachment"}; filename="${downloadName(filename,manifest,naming)}"`);
+      response.setHeader("Content-Disposition",contentDisposition(url.searchParams.get("preview")==="1"?"inline":"attachment",downloadName(filename,manifest,naming)));
       response.writeHead(status,{ "Content-Type": ({ogg:"audio/ogg",wav:"audio/wav",flac:"audio/flac",mp3:"audio/mpeg",m4a:"audio/mp4"} as Record<string,string>)[filename.split(".").pop()!]??"application/octet-stream" });
       if (request.method === "HEAD" || !info.size) { response.end(); return; }
       await pipeline(createReadStream("",{ fd: file.fd, autoClose:false, start,end }),response);

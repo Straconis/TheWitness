@@ -57,10 +57,9 @@ const pages:Record<string,string>={
   "`transcribe:true` needs the configured local speech engine/model. `upload:dropbox|google|onedrive|box` needs a connected owner cloud account. Both require the web export service. Exports share a processing queue across servers."
  ].join("\n\n"),
  downloads:[
-  "**`/downloadnames style:date`** — ZIP names such as `2026-10-01.zip`.",
-  "**`/downloadnames style:date-channel`** — ZIP names such as `2026-10-01-General-Voice.zip`.",
+  "**`/downloadnames style:date`** or **`style:date-channel`** — ZIP names such as `2026-10-01 - My Server - General Voice.zip` (date, server, channel).",
   "**`/downloadnames style:original`** — Keep original filenames. The dashboard saves the same server preference, and each download page lets you choose a style for that link.",
-  "Dates use the **recording start in UTC**. Channel names are saved when new recordings start; older recordings can fall back to a channel ID. Same-day exports can have the same download name. Individual tracks keep detailed filenames.",
+  "Dates use the **recording start in UTC**. Server and channel names are saved when new recordings start; older recordings use the current Discord names, or IDs when those are unavailable. Same-day exports can have the same download name. Speaker audio files keep each speaker's name, inside ZIPs and as individual downloads.",
   "**`/dashboard`** — Open this server's private session dashboard: rename recordings, prepare exports, recover audio, and manage settings. Web downloads must be enabled by the host operator.",
   "**`/webapp`** — Get a private browser microphone link for the **active** recording. Allow microphone access in the browser; web recording must be enabled by the host operator.",
   "Click Download on a completed recording card to open its format page. Use the Multi-track or Single-track buttons, the project ZIP media dropdown, and the optional speaker selection, intro, and silence-trim controls. Finished download pages offer Choose another format or mixdown speakers to return there.",

@@ -123,7 +123,7 @@ test('Soundcraft ZIPs include each selected backup project with shared, correctl
    // One copy of each speaker/intro track, whatever the number of projects.
    assert.equal(result.audio.length,2,label);assert.ok(result.audio.every(name=>name.endsWith('.'+trackFormat)),label);
    const media='';
-   assert.deepEqual(result.scraft.paths,['track-1.'+trackFormat,'track-2.'+trackFormat],label);assert.ok(result.scraft.exists,label);
+   assert.deepEqual(result.scraft.paths,['Alice & _Bob_ _3.'+trackFormat,'Intro - Theme.'+trackFormat],label);assert.ok(result.scraft.exists,label);
    assert.deepEqual(result.scraft.frames,[introFrames+speechFrames,introFrames],label);assert.deepEqual(result.scraft.starts,[0,0]);
    assert.deepEqual(result.scraft.tracks,['Alice & "Bob" <3','Intro: Theme']);assert.equal(result.scraft.markers.length,1);assert.ok(Math.abs(result.scraft.markers[0][0]-0.6*48000)<=2,label);assert.equal(result.scraft.markers[0][1],'Ambush & <retreat>');const marker=result.scraft.markers[0][0];
    assert.equal(result.names.includes('backup-audition.sesx'),projects.includes('audition'),label);assert.equal(result.names.includes('backup-audacity.aup3'),projects.includes('audacity'),label);
@@ -143,7 +143,7 @@ test('Soundcraft ZIPs include each selected backup project with shared, correctl
   const list=file=>JSON.parse(spawnSync('python3',['-I','-c','import zipfile,sys,json;print(json.dumps(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))',file],{encoding:'utf8'}).stdout);
   const aup=list(path.join(audacity,'project.zip'));assert.ok(aup.includes('session.aup3')&&!aup.some(n=>n.endsWith('.wav'))&&!aup.includes('track-1.wav')&&!aup.some(name=>name.startsWith('backup')));
   assert.equal((await readFile(path.join(audacity,'session.aup3'))).subarray(0,15).toString(),'SQLite format 3');
-  const sesx=list(path.join(audition,'project.zip'));assert.ok(sesx.includes('session.sesx')&&sesx.includes('track-1.flac')&&!sesx.some(name=>name.startsWith('backup')));
-  assert.match(await readFile(path.join(audition,'session.sesx'),'utf8'),/relativePath="track-1\.flac"/);
+  const sesx=list(path.join(audition,'project.zip'));assert.ok(sesx.includes('session.sesx')&&sesx.includes('Alice & _Bob_ _3.flac')&&!sesx.includes('track-1.flac')&&!sesx.some(name=>name.startsWith('backup')));
+  assert.match(await readFile(path.join(audition,'session.sesx'),'utf8'),/relativePath="Alice &amp; _Bob_ _3\.flac"/);
  }finally{await rm(root,{recursive:true,force:true});}
 });

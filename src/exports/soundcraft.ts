@@ -2,20 +2,21 @@ import {writeFile} from "node:fs/promises";
 import path from "node:path";
 import {projectSamples} from "./project-audio";
 import {assertSoundcraftLength} from "./soundcraft-limits";
+import {packagedTrackNames,speakerLabels} from "../downloads/names";
 
 /** Soundcraft native JSON format v1, verified against its serialized Session model. */
 export async function writeSoundcraft(directory:string,tracks:Array<{file:string;username:string}>,notes:Array<{seconds:number;text:string}>=[],title?:string,media=""):Promise<void>{
  if(media&&!/^[A-Za-z0-9_-]+\/$/.test(media))throw new Error("Invalid Soundcraft media folder.");
  if(!tracks.length)throw new Error("Soundcraft sessions need at least one audio track.");
  let nextID=1;const alloc=()=>nextID++;
- const sources=[],audio=[];
+ const sources=[],audio=[],labels=speakerLabels(tracks),members=packagedTrackNames(tracks);
  for(const track of tracks){
   if(!/^[^/\\\x00-\x1f]+\.(wav|flac)$/.test(track.file))throw new Error("Invalid Soundcraft audio file.");
   const frames=await projectSamples(path.join(directory,track.file));assertSoundcraftLength(frames/48000);
-  const source=alloc(),id=alloc(),clip=alloc();
-  sources.push({id:source,name:track.username,path:media+track.file,channels:2,frames,sample_rate:48000,format:track.file.endsWith(".flac")?"Flac":"Wav",time_reference:0,unsaved:false});
-  audio.push({id,name:track.username,kind:"Audio",format:"Stereo",color:[56,175,157],height:"Medium",active_playlist:0,
-   playlists:[{name:track.username,clips:[{id:clip,name:track.username,start:0,length:frames,content:{Audio:{source,offset:0}}}]}],
+  const source=alloc(),id=alloc(),clip=alloc(),name=labels.get(track.file)!;
+  sources.push({id:source,name,path:media+members.get(track.file)!,channels:2,frames,sample_rate:48000,format:track.file.endsWith(".flac")?"Flac":"Wav",time_reference:0,unsaved:false});
+  audio.push({id,name,kind:"Audio",format:"Stereo",color:[56,175,157],height:"Medium",active_playlist:0,
+   playlists:[{name,clips:[{id:clip,name,start:0,length:frames,content:{Audio:{source,offset:0}}}]}],
    mixer:{volume_db:0,pan:[-1,1],mute:false,solo:false,input:"None",output:"Main",inserts:Array(10).fill(null),sends:Array(10).fill(null),automation_mode:"Read"},automation:[],view:"waveform"});
  }
  const end=Math.max(...sources.map(source=>source.frames));
