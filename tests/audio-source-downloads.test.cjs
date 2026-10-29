@@ -13,6 +13,10 @@ with tempfile.TemporaryDirectory() as tmp:
  with patch('urllib.request.urlopen') as fetch:
   runpy.run_path(str(script));fetch.assert_not_called()
  cached=root/'work/portable/sources/source.bin';cached.unlink()
+ bundled=root/'licenses/audio/source.bin';bundled.write_bytes(payload)
+ with patch('urllib.request.urlopen') as fetch:
+  runpy.run_path(str(script));fetch.assert_not_called();assert cached.read_bytes()==payload
+ cached.unlink();bundled.unlink()
  with patch('urllib.request.urlopen',side_effect=urllib.error.URLError('offline')) as fetch,patch('time.sleep'):
   try:runpy.run_path(str(script))
   except urllib.error.URLError:pass

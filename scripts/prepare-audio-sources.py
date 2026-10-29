@@ -7,6 +7,10 @@ sources.mkdir(parents=True,exist_ok=True);build.mkdir(parents=True,exist_ok=True
 manifest=json.loads((root/'licenses/audio/sources.json').read_text())
 for name,info in manifest.items():
     target=sources/name
+    bundled=root/'licenses/audio'/name
+    if not target.exists() and bundled.is_file():
+        print(f'Using bundled {name}',flush=True)
+        target.write_bytes(bundled.read_bytes())
     if not target.exists():
         for attempt in range(1,5):
             try:
