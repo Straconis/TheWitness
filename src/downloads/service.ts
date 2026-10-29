@@ -206,7 +206,11 @@ export class DownloadService {
     if(url.pathname.startsWith("/recording/")){
       const id=url.pathname.slice(11);
       if(!sessionIDPattern.test(id))return this.error(response,404,"Recording not found.");
-      if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");
+      if(!this.authorized(url,url.pathname)){
+        const message="This private link is invalid or expired. Open Downloads again from the saved Discord recording card, or request a new /dashboard link.";
+        if(request.method==="POST"||request.headers.accept?.includes("application/json"))return this.json(response,403,{error:message});
+        return this.error(response,403,message);
+      }
       if(!this.queue)return this.error(response,503,"Downloads unavailable.");
       const metadata=JSON.parse(await readFile(path.join(this.root,id,"session.json"),"utf8"));
       const saved=await getSession(this.root,id,metadata.guildID);
@@ -226,7 +230,11 @@ export class DownloadService {
       }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Export failed."});}
     }
     if(/^\/(browser|job|dashboard)\/[a-zA-Z0-9_-]{1,64}$/.test(url.pathname)){
-      if(!this.authorized(url,url.pathname))return this.error(response,403,"This private link is invalid or expired.");
+      if(!this.authorized(url,url.pathname)){
+        const message="This private link is invalid or expired. Open Downloads again from the saved Discord recording card, or request a new /dashboard link.";
+        if(request.method==="POST"||request.headers.accept?.includes("application/json"))return this.json(response,403,{error:message});
+        return this.error(response,403,message);
+      }
       if(url.pathname.startsWith("/dashboard/"))return this.dashboard(request,response,url);
       if(request.method!=="GET"&&!(url.pathname.startsWith("/job/")&&request.method==="POST"))return this.error(response,405,"Method not allowed.");
       const id=url.pathname.split("/")[2]!;

@@ -14,6 +14,15 @@ test('private recording page scopes exports to its signed recording and validate
  const exported=await post({session:other,guildID:'foreign',format:'audition',trackFormat:'wav',targetLUFS:-23,maxTruePeakDBTP:-3,normalizeAudio:true,cleanupAudio:true,trimEndSilence:true,excludeFromMix:[]});assert.equal(exported.status,202);assert.ok((await exported.json()).url.includes('/job/'));assert.deepEqual(calls[0].slice(0,4),[id,'guild','audition',false]);assert.equal(calls[0][4].trackFormat,'wav');assert.equal(calls[0][4].targetLUFS,-23);assert.equal(calls[0][4].maxTruePeakDBTP,-3);assert.equal(calls[0][4].normalizeAudio,true);assert.equal(calls[0][4].cleanupAudio,true);assert.equal(calls[0][4].trimEndSilence,true);assert.deepEqual(calls[0][4].excludeFromMix,[]);
  assert.equal((await post({format:'audition',trackFormat:'mp3'})).status,400);assert.equal(calls.length,1);
  assert.equal((await fetch(local(service.recordingLink(id,-1)))).status,403);
+ const expiredPost=await fetch(local(service.recordingLink(id,-1)),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:'audition'})});
+ assert.equal(expiredPost.status,403);assert.match((await expiredPost.json()).error,/Open Downloads again/);
+ const dashboardURL=new URL(local(service.dashboardLink('guild')));dashboardURL.searchParams.set('signature','0'.repeat(64));
+ const expiredDashboard=await fetch(dashboardURL,{headers:{Accept:'application/json'}});
+ assert.equal(expiredDashboard.status,403);assert.match((await expiredDashboard.json()).error,/new \/dashboard link/);
+ // Use an expired recording URL for JSON GET requests too; authorization must run before data access.
+ const expiredGet=await fetch(local(service.recordingLink(id,-1)),{headers:{Accept:'application/json'}});
+ assert.equal(expiredGet.status,403);assert.match((await expiredGet.json()).error,/private link is invalid or expired/);
+
  const tampered=new URL(link);tampered.pathname='/recording/'+other;assert.equal((await fetch(tampered)).status,403);
  assert.equal((await fetch(link,{method:'POST',headers:{Origin:'https://foreign.example','Content-Type':'application/json'},body:'{}'})).status,403);
  }finally{await service?.close();await rm(root,{recursive:true,force:true});}
