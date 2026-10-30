@@ -65,3 +65,11 @@ test('owner uploads a shared notice sound on /admin that both defaults can use a
   await require('../dist/exports/storage').sweepArtifacts(root,[],new Set());for(const ext of ['ogg','json'])await fs.stat(path.join(dir,uploaded.id+'.'+ext));
  }finally{await service?.close();await fs.rm(root,{recursive:true,force:true});}
 });
+test('uploads convert Ogg Vorbis and 24-bit WAV, and conversion failures give a format hint',async t=>{
+ const {execFileSync}=require('node:child_process');let encoders='';try{encoders=execFileSync('/usr/bin/ffmpeg',['-hide_banner','-encoders'],{encoding:'utf8'});}catch{}
+ if(!encoders.includes('libvorbis'))return t.skip('system ffmpeg with libvorbis is needed to create fixtures');
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-notice-formats-'));try{
+  for(const [name,args] of [['vorbis.ogg',['-c:a','libvorbis']],['deep.wav',['-c:a','pcm_s24le']]]){const file=path.join(root,name);execFileSync('/usr/bin/ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=660:duration=0.5','-ac','2','-ar','44100',...args,file]);const result=await upload(root,'guild',await fs.readFile(file));assert.ok(result.sound.seconds>0.4,name);}
+  const bogus=Buffer.concat([Buffer.from('OggS'),Buffer.alloc(4096,7)]);await assert.rejects(upload(root,'guild',bogus),/could not be converted/);
+ }finally{await fs.rm(root,{recursive:true,force:true});}
+});
