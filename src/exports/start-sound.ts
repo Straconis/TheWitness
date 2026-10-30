@@ -49,6 +49,8 @@ export async function playStartSound(connection:any,root:string,guild:string,cho
  const clear=()=>{clearTimeout(timer);connection.removeListener("end",clear);warnings.delete(connection);};const timer=setTimeout(clear,11000);timer.unref();warnings.set(connection,{reported:false,clear});connection.once("end",clear);
  try{connection.play(file,{format:"ogg"});}catch(error){handleStartSoundError(connection,error as Error);clear();}
 }
+/** Rough length of our own encoder output, so a length problem gets a plain message before full validation. */
+async function convertedSeconds(file:string):Promise<number>{const bytes=await readFile(file),last=bytes.lastIndexOf("OggS");if(bytes.length<47||last<0||last+14>bytes.length)return NaN;const preSkip=bytes.readUInt16LE(27+bytes[26]+10);return Number(bytes.readBigUInt64LE(last+6)-BigInt(preSkip))/48000;}
 let processing=false;
 export async function uploadStartSoundChunk(root:string,guild:string,data:any):Promise<{id:string;sound?:StartSound}>{
  if(data.index===0&&data.id!==undefined)throw Error("New start sound IDs are assigned by the server.");
@@ -64,7 +66,8 @@ export async function uploadStartSoundChunk(root:string,guild:string,data:any):P
   const input=path.join(upload,"input"),output=path.join(upload,"sound.ogg");await writeFile(input,Buffer.concat(chunks),{mode:0o600});
   const ffmpeg=defaultAudioTool();
   // Raw tool output names server paths and codecs; log it and give the uploader a format hint.
-  try{await runTool(ffmpeg,["-nostdin","-v","error","-n","-protocol_whitelist","file,pipe","-f",demux,"-i",input,"-vn","-t","10.01","-af","loudnorm=I=-20:TP=-3:LRA=11","-ar","48000","-ac","2","-c:a","libopus","-b:a","96k","-application","audio","-frame_duration","20","-f","ogg",output],undefined,60000);}catch(error){console.warn("[Start sound] Conversion failed:",error);throw Error("This audio file could not be converted. Upload WAV, FLAC, MP3 or Ogg (Opus or Vorbis) audio.");}
+  try{await runTool(ffmpeg,["-nostdin","-v","error","-n","-protocol_whitelist","file,pipe","-f",demux,"-i",input,"-vn","-t","10.5","-af","loudnorm=I=-20:TP=-3:LRA=11","-ar","48000","-ac","2","-c:a","libopus","-b:a","96k","-application","audio","-frame_duration","20","-f","ogg",output],undefined,60000);}catch(error){console.warn("[Start sound] Conversion failed:",error);throw Error("This audio file could not be converted. Upload WAV, FLAC, MP3 or Ogg (Opus or Vorbis) audio.");}
+  const length=await convertedSeconds(output);if(length>10)throw Error("This sound is longer than 10 seconds. Trim it to 10 seconds or less and upload again.");if(length<0.2)throw Error("This sound is shorter than 0.2 seconds. Upload a longer sound.");
   const seconds=await validateOggOpus(output),sound={id,name:typeof data.name==="string"?data.name.replace(/[\x00-\x1f\x7f]/g,"").slice(0,150):"Start sound",seconds};
   // Server-assigned IDs, and exclusive metadata/file creation keep snapshots immutable.
   await writeFile(startSoundPath(root,guild,id),await readFile(output),{flag:"wx",mode:0o600});await writeFile(path.join(dir,id+".json"),JSON.stringify(sound),{flag:"wx",mode:0o600});return {id,sound};
