@@ -18,13 +18,22 @@ test('recording capture is closed before the end notice, and failures and shutdo
  await manager.start(guild,'voice',connection);await manager.shutdown();assert.equal(notices,1);
  }finally{await manager.shutdown();await fs.rm(root,{recursive:true,force:true});}
 });
-test('end sound settings and uploads require a manager dashboard capability',async()=>{
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-end-web-'));let service;try{const settings=new SettingsStore(path.join(root,'settings.json'));service=await DownloadService.create(root,'https://example.com');service.attach({},settings,{sessions:new Map()});const port=await service.listen(0,'127.0.0.1'),local=url=>url.replace('https://example.com',`http://127.0.0.1:${port}`),reader=local(service.dashboardLink('guild')),manager=local(service.dashboardLink('guild',true));
- const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
- for(const action of ['upload-end-sound','end-sound-mode'])assert.equal((await post(reader,{action,mode:'off'})).status,403);
- assert.equal((await post(manager,{action:'end-sound-mode',mode:'custom'})).status,400);
- const bytes=await fs.readFile(sound.bundledStartSound),uploaded=await post(manager,{action:'upload-end-sound',index:0,final:true,bytes:bytes.toString('base64'),name:'End notice.ogg'});assert.equal(uploaded.status,200);const result=await uploaded.json();assert.equal(settings.get('guild').endSound.mode,'off');assert.equal(settings.get('guild').startSound,undefined);
- assert.equal((await post(manager,{action:'end-sound-mode',mode:'custom'})).status,200);const data=await(await fetch(manager,{headers:{Accept:'application/json'}})).json();assert.equal(data.endSound.custom.id,result.id);assert.equal(data.endSound.mode,'custom');assert.equal((await fetch(local(data.endSound.previewURL))).status,200);assert.equal((await fetch(reader+'&preview-start-sound='+result.id)).status,403);
- const html=await(await fetch(manager)).text();assert.match(html,/Recording end sound/);new(require('node:vm').Script)(/<script>([\s\S]*?)<\/script>/.exec(html)[1]);
+test('end sound controls move to owner admin and preserve the selected file',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-end-web-'));let service;
+ try{
+  const settings=new SettingsStore(path.join(root,'settings.json')),{BotStatusStore}=require('../dist/discord/bot-status'),status=new BotStatusStore(path.join(root,'status.json'));await status.load();
+  service=await DownloadService.create(root,'https://example.com');service.attach({workload:()=>({running:0,queued:0})},settings,{sessions:new Map()});service.setOwnerAdmin(status,()=>{});service.setOwnerServers({allowed:()=>true},()=>[{id:'guild',name:'Guild',memberCount:2,unavailable:false}]);
+  const port=await service.listen(0,'127.0.0.1'),local=url=>url.replace('https://example.com',`http://127.0.0.1:${port}`),reader=local(service.dashboardLink('guild')),manager=local(service.dashboardLink('guild',true)),owner=local(service.adminLink());
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  for(const url of [reader,manager])for(const action of ['upload-end-sound','end-sound-mode'])assert.equal((await post(url,{action,mode:'off'})).status,403);
+  assert.equal((await post(owner,{action:'end-sound-mode',guildID:'guild',mode:'custom'})).status,400);
+  const bytes=await fs.readFile(sound.bundledStartSound),uploaded=await post(owner,{action:'upload-end-sound',guildID:'guild',index:0,final:true,bytes:bytes.toString('base64'),name:'End notice.ogg'});assert.equal(uploaded.status,200);const result=await uploaded.json();assert.equal(settings.get('guild').endSound.mode,'off');assert.equal(settings.get('guild').startSound,undefined);
+  assert.equal((await post(owner,{action:'end-sound-mode',guildID:'guild',mode:'custom'})).status,200);
+  const saved=settings.get('guild'),original=await fs.readFile(sound.startSoundPath(root,'guild',result.id));
+  const data=await(await fetch(owner+'&notices=list',{headers:{Accept:'application/json'}})).json();assert.equal(data.servers[0].endSound.custom.id,result.id);assert.equal(data.servers[0].endSound.mode,'custom');
+  const preview=await fetch(owner+'&notice-preview=end&guildID=guild');assert.equal(preview.status,200);assert.deepEqual(Buffer.from(await preview.arrayBuffer()),original);
+  assert.equal((await fetch(manager+'&preview-start-sound='+result.id)).status,403);
+  assert.ok(!(await(await fetch(manager)).text()).includes('Recording end sound'));assert.match(await(await fetch(owner)).text(),/Recording end sound/);
+  assert.deepEqual(settings.get('guild'),saved);assert.deepEqual(await fs.readFile(sound.startSoundPath(root,'guild',result.id)),original);
  }finally{await service?.close();await fs.rm(root,{recursive:true,force:true});}
 });

@@ -129,6 +129,7 @@ export class ExportQueue {
  /** Intro IDs any known job uses; cleanup and custom-intro pruning keep these. */
  introReferences():Set<string>{return new Set([...this.jobs.values()].map(job=>job.introID).filter((id):id is string=>!!id));}
  workload():{running:number;queued:number}{const jobs=[...this.jobs.values()];return {running:jobs.filter(job=>["running","cancelling"].includes(job.state)).length,queued:jobs.filter(job=>job.state==="queued").length};}
+ diagnosticStages(){return [...this.jobs.values()].filter(job=>["running","cancelling"].includes(job.state)).slice(0,16).map(job=>({id:job.id,format:job.format,stage:(typeof job.stage==="string"?job.stage:job.state).slice(0,200)}));}
  get(id:string):ExportJob|undefined{return this.jobs.get(id);}
  /** Oldest first, as Craig orders its queue, so a restart or retry cannot reshuffle waiting servers. */
  private queued():ExportJob[]{return [...this.jobs.values()].filter(job=>job.state==="queued").sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt)||(a.queueOrder??0)-(b.queueOrder??0)||a.id.localeCompare(b.id));}

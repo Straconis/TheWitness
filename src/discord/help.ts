@@ -68,7 +68,7 @@ const pages:Record<string,string>={
   "Private links expire (check the expiry shown on the page). Anyone holding a link can use it while valid; share it only with your group."
  ].join("\n\n"),
  automation:[
-  "**`/startsound mode:status|default|custom|off`** — A recording notice plays once when a new recording starts (default on). Changes require **Manage Server**; status is open. Upload a custom sound in the manager `/dashboard` first (5 MB, 0.2–10 seconds). Off leaves participants relying on the recording panel. Reconnects and stopping never replay the sound.",
+  "**`/startsound mode:status`** — Shows the current recording notice mode. Only the bot owner can change start/end notices on `/admin`; existing configured files are retained. Reconnects and stopping never replay the start sound.",
   "Automatic recording starts **off** for a new server. These settings belong to each server separately.",
   "**`/autojoin mode:enable|disable|status`** — Join when an eligible member enters voice. Enabling only joins; it does not start recording. Disabling also turns autorecord off.",
   "**`/autorecord mode:enable|disable|status`** — Enabling turns on both autojoin and automatic recording. Disabling leaves autojoin enabled. These react to subsequent voice joins.",
@@ -80,7 +80,7 @@ const pages:Record<string,string>={
  permissions:[
   "**Who can use it?** Controls are open to all server members by default. A server can restrict them to a **Bot Wrangler** role. `/help` remains available to everyone.",
   "**`/access mode:role role:Bot Wrangler`** — Restrict controls to that role. `mode:everyone` opens controls; `mode:status` shows the policy. All `/access` operations require **Manage Server**, but work even if that manager lacks the Wrangler role.",
-  "**Manage Server is also required** for changes to `/startsound`, `/autojoin`, `/autorecord`, `/dashboard`, `/recordinglimit`, `/schedule`, `/eventrecord`, `/channelrules`, `/retention`, and `/delete`. If role restrictions are enabled, those commands also require the Wrangler role.",
+  "**Manage Server is also required** for changes to `/autojoin`, `/autorecord`, `/dashboard`, `/recordinglimit`, `/schedule`, `/eventrecord`, `/channelrules`, `/retention`, and `/delete`. If role restrictions are enabled, those commands also require the Wrangler role.",
   "**`/delete session:<session-id> confirm:true`** — Permanently remove a saved recording and its exports. Check the session ID carefully.",
   "**`/retention days:30 confirm:true`** — Automatically delete completed recordings and exports older than 30 days. `days:0` disables cleanup (the default). Active, failed, and interrupted recordings are preserved.",
   "Recordings and command access are scoped to their server. **Private web links are bearer links:** anyone you give a valid link can use it. Changing the Wrangler role does not revoke already-shared links.",

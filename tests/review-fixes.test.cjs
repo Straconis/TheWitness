@@ -14,11 +14,11 @@ async function session(root,guild,channel,extra={}){const id=uuid();await mkdir(
 // Minimal DOM: enough for the dashboard script to load data and run its click handlers.
 function fakeDocument(){const elements=new Map();
  const make=tag=>{const el={tagName:String(tag).toUpperCase(),children:[],dataset:{},style:{},value:'',checked:false,disabled:false,hidden:false,textContent:'',files:[],
-  append(...items){this.children.push(...items);},prepend(...items){this.children.unshift(...items);},replaceChildren(...items){this.children=[...items];},setAttribute(){},addEventListener(){},select(){}};return el;};
+  append(...items){this.children.push(...items);},prepend(...items){this.children.unshift(...items);},replaceChildren(...items){this.children=[...items];},setAttribute(){},removeAttribute(){},pause(){},addEventListener(){},select(){}};return el;};
  return {elements,make,document:{createElement:make,querySelector(selector){if(!elements.has(selector))elements.set(selector,make('x'));return elements.get(selector);},querySelectorAll:()=>[]}};}
 const find=(el,predicate)=>predicate(el)?el:el.children?.map(child=>find(child,predicate)).find(Boolean);
 
-test('dashboard start-sound upload runs without a ReferenceError and offers Soundcraft only within its length limit',async()=>{
+test('manager dashboard keeps owner sound controls absent and offers Soundcraft only within its length limit',async()=>{
  const dom=fakeDocument(),requests=[];
  const sessions=[{id:'short',startedAt:'2026-10-01T00:00:00Z',state:'completed',tracks:[],durationSamples:48000*60},{id:'long',startedAt:'2026-10-01T00:00:00Z',state:'completed',tracks:[],durationSamples:limits.SOUNDCRAFT_MAX_FRAMES+48001,audioOrigin:0},{id:'unknown',startedAt:'2026-10-01T00:00:00Z',state:'completed',tracks:[]}];
  const data={canManage:true,soundcraftBackup:'ask',startSound:{mode:'default'},intro:{name:'Server theme',seconds:2},introChannels:[{id:'c1',name:'Voice'}],settings:{autoJoin:false,autoRecord:false},integrations:{cloud:[]},sessions};
@@ -30,10 +30,19 @@ test('dashboard start-sound upload runs without a ReferenceError and offers Soun
  assert.equal(option(cards[0]).disabled,false);assert.equal(option(cards[1]).disabled,true);assert.match(option(cards[1]).title,/length limit/);assert.equal(option(cards[2]).disabled,true);assert.match(option(cards[2]).title,/could not be verified/);
  // Channel without its own intro: the label names the inherited server default instead of pretending the channel has one.
  dom.elements.get('#intro-channel').value='c1';dom.elements.get('#intro-channel').onchange();assert.match(dom.elements.get('#intro-name').textContent,/No intro saved for this channel\. Its recordings use the server default: Server theme/);
+ assert.equal(dom.elements.has('#start-sound-upload'),false);
+});
+
+test('owner notice uploader runs without a ReferenceError and keeps upload chunks scoped to the selected server',async()=>{
+ const {noticeControlsScript}=require('../dist/downloads/notice-controls'),dom=fakeDocument(),requests=[];
+ dom.document.querySelector('#notice-server').value='g';
+ const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;requests.push(body);return {ok:true,json:async()=>body?{id:'11111111-1111-4111-8111-111111111111'}:{servers:[{id:'g',name:'Guild',startSound:{mode:'default'},endSound:{mode:'off'}}]}};};
+ const context=vm.createContext({document:dom.document,location:{href:'https://example.com/admin/control'},fetch,URL,btoa,Uint8Array,String,Error,console});
+ vm.runInContext(noticeControlsScript,context);await wait(20);
  const bytes=new Uint8Array(1024);dom.document.querySelector('#start-sound-file').files=[{size:bytes.length,name:'chime.ogg',slice:(a,b)=>({arrayBuffer:async()=>bytes.slice(a,b).buffer})}];
  await dom.elements.get('#start-sound-upload').onclick();
  assert.equal(dom.elements.get('#start-sound-status').textContent,'Sound uploaded. Select Custom and save to use it.');assert.equal(dom.elements.get('#start-sound-upload').disabled,false);
- assert.ok(requests.some(body=>body?.action==='upload-start-sound'&&body.final===true));
+ assert.ok(requests.some(body=>body?.action==='upload-start-sound'&&body.guildID==='g'&&body.final===true));
 });
 
 test('concurrent intro uploads wait their turn instead of failing and deleting chunks',async()=>{

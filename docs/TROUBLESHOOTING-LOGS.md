@@ -101,3 +101,26 @@ sudo witness-admin cloudflare-ips
 The helper downloads and validates the current official IPv4/IPv6 ranges, backs up configuration, checks nginx syntax and reloads it. Failed validation/reload restores the previous files. This does not rotate credentials or restart the recorder.
 
 See [root administration and deployment separation](ROOT-ADMIN-BOUNDARY.md) for the reviewed tool installation and dedicated deployment account. Portal login is watcher; its password is unchanged.
+
+## Export bottleneck diagnostics
+
+The owner-only `/admin` page shows CPU I/O-wait and VPS steal percentages, busiest-core usage, 10-second pressure averages, swap use, recording-device throughput and service CPU/throttling. A background sampler runs every 15 seconds even when the browser is closed. **Download resource history** returns at most 240 samples (about one hour); this small in-memory window resets on restart. Manager/recording links do not grant access.
+
+While recordings or exports are active, samples are additionally written to the existing system journal with the prefix `[Host metrics]`; one final interval is recorded when activity ends. These entries follow the host’s journal retention policy and remain available in the operator portal. Filter the portal for `[Host metrics]`, a job ID, or a processing stage. No separate growing log file, audio copy, shell command or monitoring package is introduced.
+
+Interpret several consecutive intervals alongside the job stage:
+
+- High CPU work, service CPU near available core capacity, and low I/O/memory pressure supports CPU saturation. A single-threaded operation may saturate one core while total CPU is around 50% on a two-core VPS; busiest-core and service-core usage help distinguish that case.
+- I/O wait and I/O pressure, together with device latency/queue growth, support a storage wait. High throughput or a busy device alone does not prove it.
+- Memory pressure and active swap-in/out indicate memory contention. Allocated swap by itself does not prove active swapping.
+- CPU steal indicates time the hypervisor withheld from this VPS; cgroup throttling indicates a configured CPU quota restriction.
+
+CPU work excludes I/O wait and steal; guest CPU fields are not double-counted. Device sector counters use the kernel’s 512-byte accounting units. The recording filesystem’s logical device is sampled without summing partitions and parent disks. Unsupported metrics are null/unavailable, not fabricated zeros. The service cgroup includes Node, workers and its audio-tool children; `processMemoryBytes` alone is only the Node process. These are diagnostic observations, not automatic bottleneck verdicts.
+
+Over SSH:
+
+```sh
+sudo journalctl -u the-witness.service --since '1 hour ago' --no-pager -o short-iso | grep -F '[Host metrics]'
+```
+
+A typical sample is around a few kilobytes; activity produces four records per minute, and idle periods produce no recurring journal samples. Use journal retention settings to bound long-term disk use. Job stages may contain speaker names, so these logs remain operator-only.

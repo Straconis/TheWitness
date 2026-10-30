@@ -1,5 +1,6 @@
 import {OwnerLogin,ownerSignInPage} from "./owner-login";
 import {ServerAccessStore,AdminServer,SERVER_BLOCKED_MESSAGE} from "../storage/server-access";
+import {HostDiagnostics} from "../storage/host-diagnostics";
 import {ServerLoad} from "../storage/server-load";
 import {adminPage} from "./admin-page";
 import type {BotStatusStore} from "../discord/bot-status";
@@ -54,6 +55,7 @@ const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": 
 
 export class DownloadService {
   private serverLoad?:ServerLoad;
+  private diagnostics?:HostDiagnostics;
   private serverAccess?:ServerAccessStore;
   private ownerServers?:()=>AdminServer[];
   setOwnerServers(access:ServerAccessStore,provider:()=>AdminServer[]):void{this.serverAccess=access;this.ownerServers=provider;}
@@ -61,9 +63,11 @@ export class DownloadService {
   private ownerLogin?:OwnerLogin;
   private ownerStatus?:BotStatusStore;
   private applyOwnerStatus?:()=>void;
-  setOwnerAdmin(store:BotStatusStore,apply:()=>void):void{this.ownerStatus=store;this.applyOwnerStatus=apply;}
+  setOwnerAdmin(store:BotStatusStore,apply:()=>void):void{this.ownerStatus=store;this.applyOwnerStatus=apply;this.startDiagnostics();}
   adminLink():string{return this.issue("/admin/control",3600);}
   private server?: Server;
+  private startDiagnostics(){if(this.diagnostics||!this.server?.listening||!this.ownerStatus)return;this.diagnostics=new HostDiagnostics(new ServerLoad(this.root),()=>({recordings:this.manager?.sessions.size??0,exports:this.queue?.workload?.()??{running:0,queued:0},jobs:this.queue?.diagnosticStages?.()??[]}));this.diagnostics.start();}
+
   private sockets = new WebSocketServer({ noServer:true, maxPayload:1924 });
   private guestCounts = new Map<string,number>();
   private activeGuests=new Map<string,Set<string>>();
@@ -110,13 +114,8 @@ export class DownloadService {
     if(this.serverAccess&&!this.serverAccess.allowed(guildID))return this.json(response,403,{error:SERVER_BLOCKED_MESSAGE});
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
-      const preview=url.searchParams.get("preview-start-sound");
-      if(preview){if(!canManage)return this.error(response,403,"Manager dashboard required.");const file=startSoundPath(this.root,guildID,preview);await validateOggOpus(file);response.writeHead(200,{"Content-Type":"audio/ogg","Cache-Control":"no-store"});response.end(await readFile(file));return;}
-      const choice=this.settings.get(guildID).startSound??{mode:"default"},custom=await getStartSound(this.root,guildID,choice.customID);
-      const endChoice=this.settings.get(guildID).endSound??{mode:"off"},endCustom=await getStartSound(this.root,guildID,endChoice.customID);
-      const endPreviewURL=endCustom&&canManage?this.dashboardLink(guildID,true)+"&preview-start-sound="+endCustom.id:undefined;
-      const previewURL=custom&&canManage?this.dashboardLink(guildID,true)+"&preview-start-sound="+custom.id:undefined;
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,soundcraftBackup:backupMode(this.settings.get(guildID)),startSound:{mode:choice.mode,custom,previewURL},endSound:{mode:endChoice.mode,custom:endCustom,previewURL:endPreviewURL},intro:canManage?await getServerIntro(this.root,guildID):undefined,introChannels:canManage?await this.channelIntros(guildID):undefined,integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
+      if(url.searchParams.has("preview-start-sound"))return this.error(response,403,"Recording notices are controlled by the bot owner on /admin.");
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,soundcraftBackup:backupMode(this.settings.get(guildID)),intro:canManage?await getServerIntro(this.root,guildID):undefined,introChannels:canManage?await this.channelIntros(guildID):undefined,integrations:{transcription:transcriptionReady(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage(canManage));
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -125,29 +124,8 @@ export class DownloadService {
     const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
       const data=JSON.parse(body);
-      if(["settings","upload-intro","upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode","soundcraft-backup"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
-      if(data.action==="upload-end-sound"){
-        const result=await uploadStartSoundChunk(this.root,guildID,data);
-        if(result.sound){const choice=this.settings.get(guildID).endSound??{mode:"off"};await this.settings.update(guildID,{endSound:{...choice,customID:result.id}});}
-        return this.json(response,200,result);
-      }
-      if(data.action==="end-sound-mode"){
-        if(!["custom","off"].includes(data.mode))throw Error("Invalid end sound mode.");
-        const choice=this.settings.get(guildID).endSound??{mode:"off"};
-        if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom end sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
-        await this.settings.update(guildID,{endSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
-      }
-      if(data.action==="upload-start-sound"){
-        const result=await uploadStartSoundChunk(this.root,guildID,data);
-        if(result.sound){const choice=this.settings.get(guildID).startSound??{mode:"default"};await this.settings.update(guildID,{startSound:{...choice,customID:result.id}});}
-        return this.json(response,200,result);
-      }
-      if(data.action==="start-sound-mode"){
-        if(!["default","custom","off"].includes(data.mode))throw Error("Invalid start sound mode.");
-        const choice=this.settings.get(guildID).startSound??{mode:"default"};
-        if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom start sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
-        await this.settings.update(guildID,{startSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
-      }
+      if(["upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode"].includes(data.action))return this.json(response,403,{error:"Recording notices are controlled by the bot owner on /admin."});
+      if(["settings","upload-intro","soundcraft-backup"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
       if(data.action==="soundcraft-backup"){validateBackupMode(data.mode);await this.settings.update(guildID,{soundcraftBackup:data.mode});return this.json(response,200,{saved:true,soundcraftBackup:data.mode});}
       if(data.action==="upload-intro"){
         const channelID=data.channelID||undefined;
@@ -215,13 +193,55 @@ export class DownloadService {
     if(url.pathname==="/admin/control"){
       if(!this.authorized(url,url.pathname)&&!await ownerLogin.authorized(request.headers.cookie))return this.json(response,403,{error:"Owner link is invalid or expired. Sign in at /admin or request a new private link through Discord."});
       if(!this.ownerStatus||!this.applyOwnerStatus)return this.json(response,503,{error:"Owner admin is unavailable."});
-      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload()??{running:0,queued:0}}});
+      if(request.method==="GET"&&url.searchParams.has("notice-preview")){
+        const guildID=url.searchParams.get("guildID"),which=url.searchParams.get("notice-preview");
+        if(!guildID||!this.adminServers().some(server=>server.id===guildID)||!this.settings)return this.error(response,404,"Recording notices unavailable.");
+        if(which!=="start"&&which!=="end")return this.error(response,400,"Choose start or end sound.");
+        const choice=which==="start"?this.settings.get(guildID).startSound:this.settings.get(guildID).endSound;
+        if(!choice?.customID)return this.error(response,404,"No custom recording notice configured.");
+        const file=startSoundPath(this.root,guildID,choice.customID);await validateOggOpus(file);response.writeHead(200,{"Content-Type":"audio/ogg"});response.end(await readFile(file));return;
+      }
+      if(request.method==="GET"&&url.searchParams.get("notices")==="list"){
+        if(!this.settings)return this.json(response,503,{error:"Recording notices unavailable."});
+        const servers=await Promise.all(this.adminServers().map(async server=>{const settings=this.settings!.get(server.id),start=settings.startSound??{mode:"default"},end=settings.endSound??{mode:"off"};return {id:server.id,name:server.name,startSound:{...start,custom:await getStartSound(this.root,server.id,start.customID)},endSound:{...end,custom:await getStartSound(this.root,server.id,end.customID)}};}));
+        return this.json(response,200,{servers});
+      }
+      if(request.method==="GET"&&url.searchParams.get("diagnostics")==="download"){response.setHeader("Content-Disposition",'attachment; filename="witness-host-metrics.json"');return this.json(response,200,this.diagnostics?.history()??{intervalSeconds:15,maximumSamples:240,samples:[]});}
+      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload?.()??{running:0,queued:0},jobs:this.queue?.diagnosticStages?.()??[]}});
       if(request.method==="GET"||request.method==="HEAD")return this.html(response,request.method==="HEAD"?"":adminPage(this.ownerStatus.get()));
       if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      const body=await this.readBody(request,2048);if(body===undefined)return this.json(response,413,{error:"Request too large."});
-      try{const data=JSON.parse(body);if(data.action==="create-owner-key"){const key=await ownerLogin.createKey();response.setHeader("Set-Cookie",await ownerLogin.cookie());return this.json(response,200,{key});}if(data.action==="logout"){response.setHeader("Set-Cookie",ownerLogin.clearCookie());return this.json(response,200,{signedOut:true});}if(data.action==="server-access"){if(!this.serverAccess||!this.ownerServers)return this.json(response,503,{error:"Server access controls unavailable."});if(!this.ownerServers().some(server=>server.id===data.guildID))return this.json(response,404,{error:"Server is not in the bot’s current server list."});await this.serverAccess.setAllowed(data.guildID,data.allowed);return this.json(response,200,{saved:true});}if(data.action!==undefined)throw Error("Unknown owner action.");await this.ownerStatus.update(data);this.applyOwnerStatus();return this.json(response,200,{saved:true});}catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Could not save status."});}
+      const body=await this.readBody(request,750000);if(body===undefined)return this.json(response,413,{error:"Request too large."});
+      try{const data=JSON.parse(body);
+      if(["upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode"].includes(data.action)){
+        const guildID=data.guildID;
+        if(!this.settings)return this.json(response,503,{error:"Recording notices unavailable."});
+        if(typeof guildID!=="string"||!this.adminServers().some(server=>server.id===guildID))return this.json(response,404,{error:"Choose a server the bot is in."});
+      if(data.action==="upload-end-sound"){
+        const result=await uploadStartSoundChunk(this.root,guildID,data);
+        if(result.sound){const choice=this.settings.get(guildID).endSound??{mode:"off"};await this.settings.update(guildID,{endSound:{...choice,customID:result.id}});}
+        return this.json(response,200,result);
+      }
+      if(data.action==="end-sound-mode"){
+        if(!["custom","off"].includes(data.mode))throw Error("Invalid end sound mode.");
+        const choice=this.settings.get(guildID).endSound??{mode:"off"};
+        if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom end sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
+        await this.settings.update(guildID,{endSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
+      }
+      if(data.action==="upload-start-sound"){
+        const result=await uploadStartSoundChunk(this.root,guildID,data);
+        if(result.sound){const choice=this.settings.get(guildID).startSound??{mode:"default"};await this.settings.update(guildID,{startSound:{...choice,customID:result.id}});}
+        return this.json(response,200,result);
+      }
+      if(data.action==="start-sound-mode"){
+        if(!["default","custom","off"].includes(data.mode))throw Error("Invalid start sound mode.");
+        const choice=this.settings.get(guildID).startSound??{mode:"default"};
+        if(data.mode==="custom"){if(!choice.customID||!await getStartSound(this.root,guildID,choice.customID))throw Error("Upload a custom start sound first.");await validateOggOpus(startSoundPath(this.root,guildID,choice.customID));}
+        await this.settings.update(guildID,{startSound:{...choice,mode:data.mode}});return this.json(response,200,{saved:true});
+      }
+      }
+      if(data.action==="create-owner-key"){const key=await ownerLogin.createKey();response.setHeader("Set-Cookie",await ownerLogin.cookie());return this.json(response,200,{key});}if(data.action==="logout"){response.setHeader("Set-Cookie",ownerLogin.clearCookie());return this.json(response,200,{signedOut:true});}if(data.action==="server-access"){if(!this.serverAccess||!this.ownerServers)return this.json(response,503,{error:"Server access controls unavailable."});if(!this.ownerServers().some(server=>server.id===data.guildID))return this.json(response,404,{error:"Server is not in the bot’s current server list."});await this.serverAccess.setAllowed(data.guildID,data.allowed);return this.json(response,200,{saved:true});}if(data.action!==undefined)throw Error("Unknown owner action.");await this.ownerStatus.update(data);this.applyOwnerStatus();return this.json(response,200,{saved:true});}catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Could not save status."});}
     }
     if (["/assets/witness-icon.png","/favicon.ico","/apple-touch-icon.png"].includes(url.pathname)) {
       if(request.method!=="GET"&&request.method!=="HEAD")return this.error(response,405,"Method not allowed.");
@@ -465,9 +485,11 @@ export class DownloadService {
       });
     });
     await new Promise<void>((resolve,reject) => { this.server!.once("error",reject); this.server!.listen(port,host,resolve); });
+    this.startDiagnostics();
     return (this.server.address() as import("node:net").AddressInfo).port;
   }
   async close(): Promise<void> {
+    await this.diagnostics?.stop();
     if (!this.server) return;
     for(const socket of this.sockets.clients)socket.terminate();
     this.server.closeIdleConnections();

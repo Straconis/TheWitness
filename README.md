@@ -230,7 +230,7 @@ free space does not necessarily reflect hosting-provider storage quotas. Below `
 
 A recording notice supplied by the project owner plays once after a **new recording is active**, including manual, automatic, scheduled and event starts. Reconnects and stopping do not replay it. Playback is independent of capture: missing Speak permission, missing audio or playback failure leaves recording running. The recording panel remains the visual notice. The sound does not replace participant consent.
 
-`/startsound mode:status|default|custom|off` shows or changes this server’s mode. Changes require Manage Server (and the Wrangler role in restricted servers); status is open. Existing servers default to the bundled recording notice. Managers can upload a WAV, FLAC, MP3 or Ogg file through `/dashboard` (up to 5 MB, 0.2–10 seconds), preview it, then choose Custom. Conversion targets -20 LUFS / -3 dBTP with stereo 48 kHz Opus, 96 kb/s and 20 ms frames. A missing/unreadable custom sound falls back to the default. Off relies on the recording panel notice.
+`/startsound mode:status` shows this server’s mode. Only the bot owner can change recording notices on `/admin`; manager dashboards and older slash-command choices cannot change them. Existing configured files, custom IDs and playback choices are preserved. The owner can preview the retained sounds and, when desired, upload a WAV, FLAC, MP3 or Ogg replacement (up to 5 MB, 0.2–10 seconds). Conversion targets -20 LUFS / -3 dBTP with stereo 48 kHz Opus, 96 kb/s and 20 ms frames. A missing/unreadable custom sound falls back to the default. Off relies on the recording panel notice.
 
 Host setting `START_SOUND=on|off` defaults to on and overrides all server choices when off. Optional `START_SOUND_DEFAULT_PATH` must be a regular stereo Ogg Opus file, no larger than 1 MiB, with 20 ms frames and 0.2–10 seconds of valid audio. It is checked at startup; invalid overrides warn and fall back to `assets/audio/witness-start.ogg`. Default playback does not invoke FFmpeg. Restart after changing host settings or the default asset.
 
@@ -492,7 +492,7 @@ The Discord status panel enables or disables the bot-wide message, chooses Custo
 
 The owner admin page also shows live host CPU, memory, recording-disk usage, and recording/export counts. Metrics refresh every five seconds while the page is visible; they require the same private owner link.
 
-Server managers can upload and enable a **Recording end sound** in `/dashboard` (WAV, FLAC, MP3 or Ogg; 5 MB, 0.2–10 seconds). It is off by default. Playback starts after recording capture closes and finishes before the bot leaves voice, so it is excluded from downloaded audio. Error/disconnect, low-disk, and shutdown stops skip it. Start and end sounds have independent settings.
+The bot owner can upload and enable a **Recording end sound** in `/admin` (WAV, FLAC, MP3 or Ogg; 5 MB, 0.2–10 seconds). It is off by default. Playback starts after recording capture closes and finishes before the bot leaves voice, so it is excluded from downloaded audio. Error/disconnect, low-disk, and shutdown stops skip it. Start and end sounds have independent settings.
 
 Matching completed exports are reused while their expected files remain intact, including after a restart. Changed processing settings, naming overrides, or missing files cause a fresh export. Cloud-upload and transcription requests retain their normal processing path. Reuse creates no extra audio copies and is available when disk space is critically low.
 
@@ -509,3 +509,5 @@ node /opt/the-witness/scripts/owner-admin-key.cjs /var/lib/the-witness/recording
 ```
 
 Keep the key private; anyone with it has bot-owner access. Avoid putting it in URLs, source control, or support logs.
+
+The owner admin page includes background resource diagnostics. Every 15 seconds it samples CPU work, per-core usage, I/O wait, VPS steal time, Linux CPU/memory/I/O pressure, swap, recording-device I/O and the service cgroup CPU/memory counters. The latest 240 samples can be downloaded as JSON with owner authentication. Active recordings/exports and their final interval are also logged as `[Host metrics]` in the existing system journal, with running export IDs/stages. Sampling continues with the page closed, uses a bounded in-memory history, and adds no audio copies or monitoring database. See [Operator logs](docs/TROUBLESHOOTING-LOGS.md).
