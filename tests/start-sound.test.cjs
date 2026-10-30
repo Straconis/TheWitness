@@ -70,6 +70,10 @@ test('uploads convert Ogg Vorbis and 24-bit WAV, and conversion failures give a 
  if(!encoders.includes('libvorbis'))return t.skip('system ffmpeg with libvorbis is needed to create fixtures');
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-notice-formats-'));try{
   for(const [name,args] of [['vorbis.ogg',['-c:a','libvorbis']],['deep.wav',['-c:a','pcm_s24le']]]){const file=path.join(root,name);execFileSync('/usr/bin/ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=660:duration=0.5','-ac','2','-ar','44100',...args,file]);const result=await upload(root,'guild',await fs.readFile(file));assert.ok(result.sound.seconds>0.4,name);}
+  const half=path.join(root,'half.ogg'),meta=path.join(root,'meta.txt');execFileSync('/usr/bin/ffmpeg',['-v','error','-f','lavfi','-i','sine=duration=2','-ac','2','-c:a','libvorbis',half]);await fs.writeFile(meta,';FFMETADATA1\ncomment='+'a'.repeat(100000)+'\n');
+  const tagged=path.join(root,'tagged.ogg');execFileSync('/usr/bin/ffmpeg',['-v','error','-f','lavfi','-i','sine=duration=4','-i',meta,'-map_metadata','1','-ac','1','-c:a','libopus',tagged]);
+  // Chained streams restart timestamps; large tags would otherwise spill OpusTags across pages.
+  for(const bytes of [Buffer.concat([await fs.readFile(half),await fs.readFile(half)]),await fs.readFile(tagged)]){const result=await upload(root,'guild',bytes);assert.ok(result.sound.seconds>3.9&&result.sound.seconds<4.1);}
   for(const [seconds,message] of [[12,/longer than 10 seconds/],[0.1,/shorter than 0.2 seconds/]]){const file=path.join(root,seconds+'.wav');execFileSync('/usr/bin/ffmpeg',['-v','error','-f','lavfi','-i','sine=duration='+seconds,'-ac','2',file]);await assert.rejects(upload(root,'guild',await fs.readFile(file)),message);}
   const bogus=Buffer.concat([Buffer.from('OggS'),Buffer.alloc(4096,7)]);await assert.rejects(upload(root,'guild',bogus),/could not be converted/);
  }finally{await fs.rm(root,{recursive:true,force:true});}
