@@ -124,7 +124,7 @@ export class DownloadService {
     const body=await this.readBody(request,1048576);if(body===undefined)return this.json(response,413,{error:"Request too large."});
     try{
       const data=JSON.parse(body);
-      if(["upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode","recording-notice-default"].includes(data.action))return this.json(response,403,{error:"Recording notices are controlled by the bot owner on /admin."});
+      if(["upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode","recording-notice-default","recording-notice-upload"].includes(data.action))return this.json(response,403,{error:"Recording notices are controlled by the bot owner on /admin."});
       if(["settings","upload-intro","soundcraft-backup"].includes(data.action)&&!canManage)return this.json(response,403,{error:"Use a manager dashboard link from /dashboard to change server settings or intros."});
       if(data.action==="soundcraft-backup"){validateBackupMode(data.mode);await this.settings.update(guildID,{soundcraftBackup:data.mode});return this.json(response,200,{saved:true,soundcraftBackup:data.mode});}
       if(data.action==="upload-intro"){
@@ -207,8 +207,9 @@ export class DownloadService {
       if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
-      const body=await this.readBody(request,2048);if(body===undefined)return this.json(response,413,{error:"Request too large."});
+      const body=await this.readBody(request,750000);if(body===undefined)return this.json(response,413,{error:"Request too large."});
       try{const data=JSON.parse(body);
+      if(data.action==="recording-notice-upload"){if(!this.settings)return this.json(response,503,{error:"Recording notices unavailable."});return this.json(response,200,await new RecordingNoticesAdmin(this.root,this.settings).upload(data));}
       if(["upload-start-sound","start-sound-mode","upload-end-sound","end-sound-mode"].includes(data.action))return this.json(response,410,{error:"Per-server custom recording notices are disabled. Use the shared bot defaults."});
       if(data.action==="recording-notice-default"){
         if(!this.settings)return this.json(response,503,{error:"Recording notices unavailable."});

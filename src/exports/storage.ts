@@ -4,6 +4,7 @@ import type {ExportJob} from "./jobs";
 import {resolveAudioFormat} from "./formats";
 import {getServerIntro,introRecordingID,introInUse,withRecordingIntros,SERVER_INTROS_LOCK} from "./server-intro";
 import {sessionIDPattern} from "../storage/sessions";
+import {startSoundDirectory,noticeLibraryGuild} from "./start-sound";
 const exportName=/^export-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const EXPORT_RETENTION_MS=48*3600000,JOB_RETENTION_MS=7*86400000;
 /** Estimated peak usage: output, project copy, corrected sources and one scratch track. */
@@ -71,11 +72,12 @@ export async function sweepArtifacts(root:string,active:ExportJob[],introIDs:Set
  const soundRoot=path.join(root,"start-sounds");let soundServers:import("node:fs").Dirent[]=[];
  try{soundServers=await readdir(soundRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
  for(const server of soundServers)if(server.isDirectory()&&/^[a-f0-9]{64}$/.test(server.name)){
-  const dir=path.join(soundRoot,server.name);
+  // Owner library sounds stay until removed by hand; only abandoned uploads are swept.
+  const dir=path.join(soundRoot,server.name),library=dir===startSoundDirectory(root,noticeLibraryGuild);
   for(const file of await readdir(dir,{withFileTypes:true})){
    const target=path.join(dir,file.name);const age=now-(await lstat(target)).mtimeMs;
    if(file.isDirectory()&&file.name.startsWith("upload-")&&sessionIDPattern.test(file.name.slice(7))&&age>3600000)await rm(target,{recursive:true,force:true});
-   else if(file.isFile()&&/\.(ogg|json)$/.test(file.name)){const id=file.name.slice(0,file.name.lastIndexOf("."));if(sessionIDPattern.test(id)&&!soundIDs.has(id)&&age>EXPORT_RETENTION_MS)await rm(target,{force:true});}
+   else if(file.isFile()&&/\.(ogg|json)$/.test(file.name)){const id=file.name.slice(0,file.name.lastIndexOf("."));if(sessionIDPattern.test(id)&&!soundIDs.has(id)&&!library&&age>EXPORT_RETENTION_MS)await rm(target,{force:true});}
   }
  }
  for(const entry of await directories(root)){const introRoot=path.join(root,entry.name,"intros");let scopes;try{scopes=await readdir(introRoot,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")continue;throw error;}

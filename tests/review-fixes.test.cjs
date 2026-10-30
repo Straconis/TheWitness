@@ -33,13 +33,13 @@ test('manager dashboard keeps owner sound controls absent and offers Soundcraft 
  assert.equal(dom.elements.has('#start-sound-upload'),false);
 });
 
-test('owner notice panel saves one shared default without upload or per-server controls',async()=>{
+test('owner notice panel saves one shared default and uploads shared sounds without per-server controls',async()=>{
  const {noticeControlsScript,noticeControlsHTML}=require('../dist/downloads/notice-controls'),dom=fakeDocument(),requests=[];
  const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;requests.push(body);return {ok:true,json:async()=>body?{saved:true}:{defaults:{start:{choice:{mode:'default'},needsSelection:false},end:{choice:{mode:'off'},needsSelection:false}},sounds:[]}};};
  const context=vm.createContext({document:dom.document,location:{href:'https://example.com/admin/control'},fetch,URL,String,Error,console});
  vm.runInContext(noticeControlsScript,context);await wait(20);dom.document.querySelector('#start-sound-choice').value='off';await dom.elements.get('#start-sound-save').onclick();
  assert.equal(dom.elements.get('#start-sound-status').textContent,'Shared default saved.');assert.ok(requests.some(body=>body?.action==='recording-notice-default'&&body.which==='start'&&body.choice.mode==='off'));
- assert.ok(!noticeControlsHTML.includes('type="file"'));assert.ok(!noticeControlsHTML.includes('notice-server'));
+ assert.ok(noticeControlsHTML.includes('id="notice-file" type="file"'));assert.ok(!noticeControlsHTML.includes('notice-server'));assert.ok(!noticeControlsHTML.includes('start-sound-upload'));
 });
 
 test('concurrent intro uploads wait their turn instead of failing and deleting chunks',async()=>{

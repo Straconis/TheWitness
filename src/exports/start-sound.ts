@@ -8,6 +8,8 @@ import {runTool} from "./process";
 import type {GuildSettings} from "../storage/settings";
 import {sessionIDPattern} from "../storage/sessions";
 export interface StartSound {id:string;name:string;seconds:number}
+/** Owner-uploaded shared notices live under this pseudo-server; Discord IDs are numeric, so it cannot collide. */
+export const noticeLibraryGuild="bot-notice-library";
 export const bundledStartSound=path.resolve(__dirname,"../../assets/audio/witness-start.ogg");
 export function startSoundEnabled(value=process.env.START_SOUND?.trim()):boolean{if(value===undefined||value===""||value==="on")return true;if(value==="off")return false;throw Error("START_SOUND must be on or off.");}
 export function validateStartSound(choice:GuildSettings["startSound"]):void{if(choice===undefined)return;if(!choice||typeof choice!=="object"||!["default","custom","off"].includes(choice.mode)||(choice.customID!==undefined&&!sessionIDPattern.test(choice.customID))||(choice.mode==="custom"&&!choice.customID))throw Error("Invalid start sound setting.");}

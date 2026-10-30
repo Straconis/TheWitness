@@ -46,3 +46,22 @@ test('owner sets a shared start default using retained audio; custom uploads sta
   const loaded=new SettingsStore(path.join(root,'settings.json'));await loaded.load();assert.deepEqual(loaded.recordingNotices.resolve('start','new-server',loaded.all()),choice);
  }finally{await service?.close();await fs.rm(root,{recursive:true,force:true});}
 });
+test('owner uploads a shared notice sound on /admin that both defaults can use and retention keeps',async()=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-notice-library-'));let service;
+ try{
+  const settings=new SettingsStore(path.join(root,'settings.json')),{BotStatusStore}=require('../dist/discord/bot-status'),status=new BotStatusStore(path.join(root,'status.json'));await settings.load();await status.load();
+  service=await DownloadService.create(root,'http://localhost');service.attach({workload:()=>({running:0,queued:0})},settings,{sessions:new Map()});service.setOwnerAdmin(status,()=>{});service.setOwnerServers({allowed:()=>true},()=>[{id:'guild',name:'Guild',memberCount:2,unavailable:false}]);
+  const port=await service.listen(0,'127.0.0.1'),local=link=>link.replace('http://localhost',`http://127.0.0.1:${port}`),manager=local(service.dashboardLink('guild',true)),owner=local(service.adminLink());
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),bytes=wav(.5).toString('base64');
+  assert.equal((await post(manager,{action:'recording-notice-upload',index:0,bytes,final:true,name:'Nope'})).status,403);
+  const response=await post(owner,{action:'recording-notice-upload',index:0,bytes,final:true,name:'Chime.wav'}),uploaded=await response.json();assert.equal(response.status,200);assert.equal(uploaded.sound.name,'Chime.wav');
+  assert.equal((await post(owner,{action:'recording-notice-upload',index:0,bytes:'!!',final:true})).status,400);
+  const list=await(await fetch(owner+'&notices=list',{headers:{Accept:'application/json'}})).json();assert.deepEqual(list.sounds.map(item=>[item.sourceGuildID,item.customID]),[[sound.noticeLibraryGuild,uploaded.id]]);
+  const choice={mode:'custom',sourceGuildID:sound.noticeLibraryGuild,customID:uploaded.id};
+  for(const which of ['start','end'])assert.equal((await post(owner,{action:'recording-notice-default',which,choice})).status,200);
+  assert.deepEqual(settings.recordingNotices.resolve('end','guild',settings.all()),choice);assert.equal((await fetch(owner+'&notice-preview=end')).status,200);
+  await settings.recordingNotices.update('start',{mode:'default'});await settings.recordingNotices.update('end',{mode:'off'});
+  const dir=sound.startSoundDirectory(root,sound.noticeLibraryGuild),old=new Date(Date.now()-72*3600000);for(const ext of ['ogg','json'])await fs.utimes(path.join(dir,uploaded.id+'.'+ext),old,old);
+  await require('../dist/exports/storage').sweepArtifacts(root,[],new Set());for(const ext of ['ogg','json'])await fs.stat(path.join(dir,uploaded.id+'.'+ext));
+ }finally{await service?.close();await fs.rm(root,{recursive:true,force:true});}
+});
