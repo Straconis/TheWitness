@@ -33,16 +33,13 @@ test('manager dashboard keeps owner sound controls absent and offers Soundcraft 
  assert.equal(dom.elements.has('#start-sound-upload'),false);
 });
 
-test('owner notice uploader runs without a ReferenceError and keeps upload chunks scoped to the selected server',async()=>{
- const {noticeControlsScript}=require('../dist/downloads/notice-controls'),dom=fakeDocument(),requests=[];
- dom.document.querySelector('#notice-server').value='g';
- const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;requests.push(body);return {ok:true,json:async()=>body?{id:'11111111-1111-4111-8111-111111111111'}:{servers:[{id:'g',name:'Guild',startSound:{mode:'default'},endSound:{mode:'off'}}]}};};
- const context=vm.createContext({document:dom.document,location:{href:'https://example.com/admin/control'},fetch,URL,btoa,Uint8Array,String,Error,console});
- vm.runInContext(noticeControlsScript,context);await wait(20);
- const bytes=new Uint8Array(1024);dom.document.querySelector('#start-sound-file').files=[{size:bytes.length,name:'chime.ogg',slice:(a,b)=>({arrayBuffer:async()=>bytes.slice(a,b).buffer})}];
- await dom.elements.get('#start-sound-upload').onclick();
- assert.equal(dom.elements.get('#start-sound-status').textContent,'Sound uploaded. Select Custom and save to use it.');assert.equal(dom.elements.get('#start-sound-upload').disabled,false);
- assert.ok(requests.some(body=>body?.action==='upload-start-sound'&&body.guildID==='g'&&body.final===true));
+test('owner notice panel saves one shared default without upload or per-server controls',async()=>{
+ const {noticeControlsScript,noticeControlsHTML}=require('../dist/downloads/notice-controls'),dom=fakeDocument(),requests=[];
+ const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;requests.push(body);return {ok:true,json:async()=>body?{saved:true}:{defaults:{start:{choice:{mode:'default'},needsSelection:false},end:{choice:{mode:'off'},needsSelection:false}},sounds:[]}};};
+ const context=vm.createContext({document:dom.document,location:{href:'https://example.com/admin/control'},fetch,URL,String,Error,console});
+ vm.runInContext(noticeControlsScript,context);await wait(20);dom.document.querySelector('#start-sound-choice').value='off';await dom.elements.get('#start-sound-save').onclick();
+ assert.equal(dom.elements.get('#start-sound-status').textContent,'Shared default saved.');assert.ok(requests.some(body=>body?.action==='recording-notice-default'&&body.which==='start'&&body.choice.mode==='off'));
+ assert.ok(!noticeControlsHTML.includes('type="file"'));assert.ok(!noticeControlsHTML.includes('notice-server'));
 });
 
 test('concurrent intro uploads wait their turn instead of failing and deleting chunks',async()=>{

@@ -21,26 +21,28 @@ test('custom upload converts normalized bounded Opus and rejects malformed, over
 test('settings reject invalid sound choices and retention keeps custom IDs even in default/off modes',async()=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-start-retain-'));let queue;try{const settings=new SettingsStore(path.join(root,'settings.json'));for(const choice of [null,{mode:'bad'},{mode:'custom'},{mode:'custom',customID:'../x'}])await assert.rejects(settings.update('guild',{startSound:choice}),/Invalid/);const chosen=randomUUID(),stale=randomUUID(),dir=sound.startSoundDirectory(root,'guild');await fs.mkdir(dir,{recursive:true});const old=new Date(Date.now()-72*3600000);for(const id of [chosen,stale])for(const ext of ['ogg','json']){const f=path.join(dir,id+'.'+ext);await fs.writeFile(f,'test');await fs.utimes(f,old,old);}const abandoned=path.join(dir,'upload-'+randomUUID());await fs.mkdir(abandoned);await fs.utimes(abandoned,old,old);await settings.update('guild',{startSound:{mode:'off',customID:chosen}});queue=new ExportQueue(root,undefined,undefined,undefined,undefined,()=>new Set(settings.all().map(([,value])=>value.startSound?.customID).filter(Boolean)));await queue.load();await fs.stat(path.join(dir,chosen+'.ogg'));await fs.stat(path.join(dir,chosen+'.json'));await assert.rejects(fs.stat(path.join(dir,stale+'.ogg')),{code:'ENOENT'});await assert.rejects(fs.stat(abandoned),{code:'ENOENT'});}finally{await queue?.close();await fs.rm(root,{recursive:true,force:true});}
 });
-test('recording start controls and previews require owner admin, retaining configured files',async()=>{
+test('owner sets a shared start default using retained audio; custom uploads stay disabled',async()=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'witness-start-web-'));let service;
  try{
-  const settings=new SettingsStore(path.join(root,'settings.json')), {BotStatusStore}=require('../dist/discord/bot-status'),status=new BotStatusStore(path.join(root,'status.json'));await status.load();
+  const settings=new SettingsStore(path.join(root,'settings.json')), {BotStatusStore}=require('../dist/discord/bot-status'),status=new BotStatusStore(path.join(root,'status.json'));await settings.load();await status.load();
+  const uploaded=await sound.uploadStartSoundChunk(root,'guild',{index:0,bytes:wav(.5).toString('base64'),final:true,name:'Now recording'});await settings.update('guild',{startSound:{mode:'custom',customID:uploaded.id}});
+  const file=sound.startSoundPath(root,'guild',uploaded.id),original=await fs.readFile(file),saved=await fs.readFile(path.join(root,'settings.json'));
   service=await DownloadService.create(root,'http://localhost');service.attach({workload:()=>({running:0,queued:0})},settings,{sessions:new Map()});service.setOwnerAdmin(status,()=>{});service.setOwnerServers({allowed:()=>true},()=>[{id:'guild',name:'Guild',memberCount:2,unavailable:false}]);
   const port=await service.listen(0,'127.0.0.1'),local=link=>link.replace('http://localhost',`http://127.0.0.1:${port}`),read=local(service.dashboardLink('guild')),manager=local(service.dashboardLink('guild',true)),owner=local(service.adminLink());
-  async function post(url,body){const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:response.status,data:await response.json()};}
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   for(const url of [read,manager])for(const action of ['upload-start-sound','start-sound-mode'])assert.equal((await post(url,{action,mode:'off'})).status,403);
-  assert.equal((await post(owner,{action:'start-sound-mode',guildID:'other',mode:'off'})).status,404);
-  assert.equal((await post(owner,{action:'start-sound-mode',guildID:'guild',mode:'custom'})).status,400);
-  const uploaded=await post(owner,{action:'upload-start-sound',guildID:'guild',index:0,bytes:wav(.5).toString('base64'),final:true,name:'Notice'});assert.equal(uploaded.status,200);assert.equal(settings.get('guild').startSound.mode,'default');
-  assert.equal((await post(owner,{action:'start-sound-mode',guildID:'guild',mode:'custom'})).status,200);
-  const file=sound.startSoundPath(root,'guild',uploaded.data.id),original=await fs.readFile(file),saved=JSON.stringify(settings.get('guild'));
-  const data=await(await fetch(owner+'&notices=list',{headers:{Accept:'application/json'}})).json();assert.equal(data.servers[0].startSound.custom.id,uploaded.data.id);assert.equal(data.servers[0].startSound.mode,'custom');
-  const preview=await fetch(owner+'&notice-preview=start&guildID=guild');assert.equal(preview.status,200);assert.deepEqual(Buffer.from(await preview.arrayBuffer()),original);
-  assert.equal((await fetch(read+'&preview-start-sound='+uploaded.data.id)).status,403);assert.equal((await fetch(manager+'&preview-start-sound='+uploaded.data.id)).status,403);
-  assert.equal((await fetch(owner+'&notice-preview=start&guildID=other')).status,404);
-  const managerHTML=await(await fetch(manager)).text(),ownerHTML=await(await fetch(owner)).text();assert.ok(!managerHTML.includes('start-sound-upload'));assert.match(ownerHTML,/start-sound-upload/);
+  for(const action of ['upload-start-sound','start-sound-mode'])assert.equal((await post(owner,{action,guildID:'guild',mode:'off'})).status,410);
+  const choice={mode:'custom',sourceGuildID:'guild',customID:uploaded.id};
+  const data=await(await fetch(owner+'&notices=list',{headers:{Accept:'application/json'}})).json();assert.deepEqual(data.defaults.start.choice,choice);assert.equal(data.sounds[0].id,uploaded.id);
+  const preview=await fetch(owner+'&notice-preview=start');assert.equal(preview.status,200);assert.deepEqual(Buffer.from(await preview.arrayBuffer()),original);
+  assert.equal((await post(manager,{action:'recording-notice-default',which:'start',choice:{mode:'off'}})).status,403);
+  assert.equal((await post(owner,{action:'recording-notice-default',which:'start',choice:{mode:'custom',sourceGuildID:'other',customID:uploaded.id}})).status,400);
+  assert.equal((await post(owner,{action:'recording-notice-default',which:'start',choice})).status,200);
+  assert.equal(settings.recordingNotices.resolve('start','another-server',settings.all()).customID,uploaded.id);
+  const ownerHTML=await(await fetch(owner)).text();assert.match(ownerHTML,/Default recording notices/);assert.ok(!ownerHTML.includes('start-sound-upload'));assert.ok(!ownerHTML.includes('notice-server'));
+  const managerHTML=await(await fetch(manager)).text();assert.ok(!managerHTML.includes('start-sound-upload'));
   for(const html of [managerHTML,ownerHTML])for(const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g))new(require('node:vm').Script)(match[1]);
-  assert.equal(JSON.stringify(settings.get('guild')),saved);assert.deepEqual(await fs.readFile(file),original);
-  const reloaded=new SettingsStore(path.join(root,'settings.json'));await reloaded.load();assert.equal(reloaded.get('guild').startSound.customID,uploaded.data.id);
+  assert.deepEqual(await fs.readFile(path.join(root,'settings.json')),saved);assert.deepEqual(await fs.readFile(file),original);
+  const loaded=new SettingsStore(path.join(root,'settings.json'));await loaded.load();assert.deepEqual(loaded.recordingNotices.resolve('start','new-server',loaded.all()),choice);
  }finally{await service?.close();await fs.rm(root,{recursive:true,force:true});}
 });

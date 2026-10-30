@@ -68,7 +68,7 @@ const pages:Record<string,string>={
   "Private links expire (check the expiry shown on the page). Anyone holding a link can use it while valid; share it only with your group."
  ].join("\n\n"),
  automation:[
-  "**`/startsound mode:status`** — Shows the current recording notice mode. Only the bot owner can change start/end notices on `/admin`; existing configured files are retained. Reconnects and stopping never replay the start sound.",
+  "**`/startsound mode:status`** — Shows the current recording notice mode. Only the bot owner can select shared start/stop defaults on `/admin`; existing files are retained and per-server custom uploads are temporarily disabled. Reconnects and stopping never replay the start sound.",
   "Automatic recording starts **off** for a new server. These settings belong to each server separately.",
   "**`/autojoin mode:enable|disable|status`** — Join when an eligible member enters voice. Enabling only joins; it does not start recording. Disabling also turns autorecord off.",
   "**`/autorecord mode:enable|disable|status`** — Enabling turns on both autojoin and automatic recording. Disabling leaves autojoin enabled. These react to subsequent voice joins.",

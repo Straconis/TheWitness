@@ -1,3 +1,5 @@
+import {RecordingNotices} from "./recording-notices";
+import path from "node:path";
 import {validateStartSound} from "../exports/start-sound";
 import {validateBackupMode,SoundcraftBackupMode} from "../exports/soundcraft-backup";
 import { validateRecordingDuration } from "../recording/duration";
@@ -22,7 +24,8 @@ function validateEvents(settings:GuildSettings):void{
 export class SettingsStore {
   private values: Record<string, GuildSettings> = {};
   private queue: Promise<void> = Promise.resolve();
-  constructor(private file: string) {}
+  readonly recordingNotices:RecordingNotices;
+  constructor(private file: string) {this.recordingNotices=new RecordingNotices(path.dirname(file));}
   async load(): Promise<void> {
     try {
       const data = JSON.parse(await readFile(this.file,"utf8"));
@@ -34,6 +37,7 @@ export class SettingsStore {
       }
       this.values = data;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    await this.recordingNotices.load();
   }
   all():Array<[string,GuildSettings]>{return Object.keys(this.values).map(id=>[id,this.get(id)]);}
   get(id:string):GuildSettings{return structuredClone(this.values[id]??{autoJoin:false,autoRecord:false});}

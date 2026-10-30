@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   await initializeStartSound();
 
   await cleanTransientArtifacts(config.recordingPath).catch(error=>console.warn("[Storage] Startup temporary cleanup deferred.",error));
-  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set(settingsStore.all().map(([,settings])=>[settings.startSound?.customID,settings.endSound?.customID]).flat().filter((id):id is string=>!!id)));
+  const exportQueue = new ExportQueue(config.recordingPath,undefined,async()=>(await storageMonitor.check()).critical,undefined,()=>storageMonitor.check(),()=>new Set([...settingsStore.all().map(([,settings])=>[settings.startSound?.customID,settings.endSound?.customID]).flat().filter((id):id is string=>!!id),...settingsStore.recordingNotices.references().map(ref=>ref.customID)]));
   exportQueue.setServerAccess(serverAccess);
   exportQueue.setSoundcraftBackupPolicy(guildID=>backupMode(settingsStore.get(guildID)));
   setStorageExportQueue(exportQueue);

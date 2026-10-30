@@ -1,7 +1,7 @@
 import {ServerAccessStore,SERVER_BLOCKED_MESSAGE} from "../storage/server-access";
 import {BotStatusStore,statusActivities,isApplicationOwner} from "./bot-status";
 import { backupMode,resolveBackupProjects,ASK_CHOICE_REQUIRED } from "../exports/soundcraft-backup";
-import {playEndSound,playStartSound,getStartSound,startSoundPath,validateOggOpus} from "../exports/start-sound";
+import {playEndSound,playStartSound} from "../exports/start-sound";
 import {protectRecordingSpace} from "../exports/storage";
 import {UserError,commandErrorMessage} from "../errors";
 import { RECORDING_DURATION_HOURS, DEFAULT_RECORDING_DURATION_HOURS } from "../recording/duration";
@@ -209,7 +209,7 @@ async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID:
   try {
     recordings.selfUserID=client.user.id;
     const session = await recordings.start(guild, channelID, connection, () => client.joinVoiceChannel(channelID, {opusOnly:true,selfDeaf:false}));
-    if(session!==existing){void (async()=>{const channel=guild.channels.get(channelID);await playStartSound(connection,config.recordingPath,guild.id,settingsStore.get(guild.id).startSound,Boolean(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak")),()=>recordings.sessions.get(guild.id)===session&&session.state==="recording");})().catch(error=>console.warn("[Start sound] Playback skipped:",error));}
+    if(session!==existing){void (async()=>{const channel=guild.channels.get(channelID);const notice=settingsStore.recordingNotices.resolve("start",guild.id,settingsStore.all());await playStartSound(connection,config.recordingPath,notice.mode==="custom"?notice.sourceGuildID:guild.id,notice,Boolean(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak")),()=>recordings.sessions.get(guild.id)===session&&session.state==="recording");})().catch(error=>console.warn("[Start sound] Playback skipped:",error));}
     if (title) await session.setTitle(title);
     return session;
   } catch (error) {
@@ -224,7 +224,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
   });
 
-  recordings.onStopped=async session=>{const connection=client.voiceConnections.get(session.guildID),channel=client.guilds.get(session.guildID)?.channels.get(session.channelID);const canSpeak=!!(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak"));await playEndSound(connection,config.recordingPath,session.guildID,settingsStore.get(session.guildID).endSound,canSpeak);};
+  recordings.onStopped=async session=>{const connection=client.voiceConnections.get(session.guildID),channel=client.guilds.get(session.guildID)?.channels.get(session.channelID);const canSpeak=!!(channel&&"permissionsOf" in channel&&channel.permissionsOf(client.user.id).has("voiceSpeak"));const notice=settingsStore.recordingNotices.resolve("end",session.guildID,settingsStore.all());await playEndSound(connection,config.recordingPath,notice.mode==="custom"?notice.sourceGuildID:session.guildID,notice.mode==="default"?{mode:"off"}:notice,canSpeak);};
   if(serverAccess){recordings.setServerAccess(serverAccess);exportQueue?.setServerAccess(serverAccess);downloads?.setOwnerServers(serverAccess,()=>[...[...client.guilds.values()].map(guild=>({id:guild.id,name:guild.name||"Unavailable server",memberCount:guild.memberCount??null,unavailable:guild.unavailable===true})),...[...client.unavailableGuilds.values()].filter(guild=>!client.guilds.has(guild.id)).map(guild=>({id:guild.id,name:"Unavailable server",memberCount:null,unavailable:true}))]);}
   const applyStatus=()=>{if(botStatus)client.editStatus("online",statusActivities(botStatus.get()));};
   if(botStatus)downloads?.setOwnerAdmin(botStatus,applyStatus);
@@ -402,7 +402,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     const settings = getSettings(guildID);
 
     if(commandName==="startsound"){
-      const mode=interaction.data.options?.find((option:any)=>option.name==="mode")?.value??"status",choice=settingsStore.get(guildID).startSound??{mode:"default"};
+      const mode=interaction.data.options?.find((option:any)=>option.name==="mode")?.value??"status",choice=settingsStore.recordingNotices.resolve("start",guildID,settingsStore.all());
       if(!["status","default","custom","off"].includes(mode))throw new UserError("Invalid start sound mode.");
       if(mode!=="status")throw new UserError("Recording notices are controlled by the bot owner on /admin.");
       await interaction.createMessage({content:`Start sound: ${mode==="status"?choice.mode:mode}.${process.env.START_SOUND?.trim()==="off"?" The host has disabled all start sounds.":""}${mode==="off"?" Participants will rely on the recording panel message to know recording started.":""}`,flags:64});return;
