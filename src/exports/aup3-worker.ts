@@ -33,18 +33,20 @@ function documentFor(tracks:Track[],notes:NativeProjectInput["notes"]):Element{
  if(notes.length)children.push(element("labeltrack",{name:"Recording notes",numlabels:notes.length,height:150,minimized:0,selected:0},notes.map(n=>element("label",{t:n.seconds,t1:n.seconds,title:n.text}))));
  return element("project",{xmlns:"http://audacity.sourceforge.net/xml/",version:"1.3.0",audacityversion:"3.7.9",rate:48000,sel0:0,sel1:0,h:0,zoom:86.13,vpos:0,tempo:120,timesigupper:4,timesiglower:4},children);
 }
-function summary(values:Int16Array|Float32Array,scale:number){
- const groups64=Math.ceil(values.length/65536),groups256=groups64*256,small=new Float32Array(groups256*3),large=new Float32Array(groups64*3);let totalSquares=0,min=Infinity,max=-Infinity;
+/** Build both waveform resolutions in one sample scan, preserving summation order. */
+export function summary(values:Int16Array|Float32Array,scale:number){
+ const groups64=Math.ceil(values.length/65536),groups256=groups64*256,small=new Float32Array(groups256*3),large=new Float32Array(groups64*3);
+ let totalSquares=0,min=Infinity,max=-Infinity,largeSquares=0,largeMin=Infinity,largeMax=-Infinity;
  for(let group=0;group<groups256;group++){
   const start=group*256,end=Math.min(values.length,start+256);let lo=Infinity,hi=-Infinity,sum=0;
-  for(let i=start;i<end;i++){const v=values[i]!*scale;lo=Math.min(lo,v);hi=Math.max(hi,v);sum+=v*v;}
+  for(let i=start;i<end;i++){const v=values[i]!*scale,square=v*v;lo=Math.min(lo,v);hi=Math.max(hi,v);sum+=square;largeSquares+=square;}
   small[group*3]=start<values.length?lo:3.4028234663852886e38;small[group*3+1]=start<values.length?hi:-3.4028234663852886e38;small[group*3+2]=end>start?Math.sqrt(sum/(end-start)):0;
-  if(end>start){totalSquares+=sum;min=Math.min(min,lo);max=Math.max(max,hi);}
- }
- for(let group=0;group<groups64;group++){
-  const start=group*65536,end=Math.min(values.length,start+65536);let lo=Infinity,hi=-Infinity,sum=0;
-  for(let i=start;i<end;i++){const v=values[i]!*scale;lo=Math.min(lo,v);hi=Math.max(hi,v);sum+=v*v;}
-  large[group*3]=lo;large[group*3+1]=hi;large[group*3+2]=Math.sqrt(sum/(end-start));
+  if(end>start){totalSquares+=sum;min=Math.min(min,lo);max=Math.max(max,hi);largeMin=Math.min(largeMin,lo);largeMax=Math.max(largeMax,hi);}
+  if((group+1)%256===0){
+   const index=Math.floor(group/256),count=Math.min(values.length-index*65536,65536);
+   large[index*3]=largeMin;large[index*3+1]=largeMax;large[index*3+2]=Math.sqrt(largeSquares/count);
+   largeSquares=0;largeMin=Infinity;largeMax=-Infinity;
+  }
  }
  return {min,max,rms:Math.sqrt(totalSquares/values.length),small:Buffer.from(small.buffer),large:Buffer.from(large.buffer)};
 }

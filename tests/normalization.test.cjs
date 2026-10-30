@@ -27,3 +27,25 @@ test('custom loudness and true peak settings are validated and applied to real a
  const {resolveLoudness}=require('../dist/exports/normalization');assert.deepEqual(resolveLoudness(),{targetLUFS:-16,maxTruePeakDBTP:-1});for(const settings of [{targetLUFS:NaN},{targetLUFS:-71},{targetLUFS:-4},{targetLUFS:'-16'},{maxTruePeakDBTP:1},{maxTruePeakDBTP:-10}])assert.throws(()=>resolveLoudness(settings));
  const root=await mkdtemp(path.join(os.tmpdir(),'witness-custom-lufs-'));try{const file=path.join(root,'custom.wav');await writeFile(file,wav(2000));const report=await matchLoudness(file,'pcm_s16le',ffmpeg,undefined,undefined,{targetLUFS:-23,maxTruePeakDBTP:-3});assert.equal(report.targetLUFS,-23);assert.ok(Math.abs(report.after.lufs+23)<.5);assert.ok(report.after.truePeak<=-2.9);}finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('lossless normalization reports match saved samples with varying levels and pauses',async()=>{
+ const {execFile}=require('node:child_process'),{promisify}=require('node:util');
+ const run=promisify(execFile),root=await mkdtemp(path.join(os.tmpdir(),'witness-output-level-'));
+ try{
+  for(const codec of ['pcm_s16le','flac']){
+   const source=path.join(root,'source.wav'),file=path.join(root,codec==='flac'?'out.flac':'out.wav');
+   const audio=wav(0,20);
+   for(let frame=0;frame<48000*20;frame++){
+    const t=frame/48000,amplitude=1000+1500*(.5+.5*Math.sin(t));
+    const value=t%9<6?Math.round(amplitude*(.7*Math.sin(t*2*Math.PI*180)+.3*Math.sin(t*2*Math.PI*1234))):0;
+    audio.writeInt16LE(value,44+frame*4);audio.writeInt16LE(value,46+frame*4);
+   }
+   await writeFile(source,audio);
+   await run(ffmpeg,['-v','error','-n','-i',source,'-c:a',codec,file]);
+   const report=await matchLoudness(file,codec,ffmpeg),actual=await measureLevel(file,ffmpeg);
+   for(const metric of ['lufs','truePeak','lra','threshold'])assert.ok(Math.abs(report.after[metric]-actual[metric])<=.05,`${codec} ${metric}: ${report.after[metric]} vs ${actual[metric]}`);
+   assert.equal((await require('../dist/downloads/waveforms').waveform(file)).duration,20);
+   await rm(source);
+  }
+ }finally{await rm(root,{recursive:true,force:true});}
+});
