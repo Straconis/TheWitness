@@ -1,3 +1,5 @@
+import {RecoveryStore} from "../recovery/store";
+import {recoveryPage} from "./recovery-page";
 import {savedExportFailure} from "../exports/failure";
 import {RecordingNoticesAdmin} from "./recording-notices-admin";
 import {OwnerLogin,ownerSignInPage} from "./owner-login";
@@ -55,6 +57,8 @@ const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup3?|scraft)|p
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
 
 export class DownloadService {
+  private recovery?:RecoveryStore;
+  recoveryLink():string{return this.issue("/recovery",3600);}
   private serverLoad?:ServerLoad;
   private diagnostics?:HostDiagnostics;
   private serverAccess?:ServerAccessStore;
@@ -180,6 +184,37 @@ export class DownloadService {
     response.setHeader("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(request.url ?? "/","http://localhost");
     const ownerLogin=this.ownerLogin??=new OwnerLogin(this.root,this.key,this.publicURL.startsWith("https:"));
+    if(url.pathname==="/recovery"||url.pathname==="/recovery/"){
+      const authorized=this.authorized(url,"/recovery")||await ownerLogin.authorized(request.headers.cookie);
+      if(request.method==="GET"||request.method==="HEAD"){
+        if(request.headers.accept?.includes("application/json")){
+          if(!authorized)return this.json(response,403,{error:"Owner sign-in is required for recovery."});
+          const jobs=await(this.recovery??=new RecoveryStore(this.root)).list();
+          return this.json(response,200,{jobs:jobs.map(job=>({...job,recordingURL:job.state==="ready"&&job.sessionID?this.recordingLink(job.sessionID):undefined,editorURL:job.state==="ready"&&job.sessionID&&job.sourceExport?this.link(job.sessionID,job.sourceExport)+"&editor=1":undefined}))});
+        }
+        return this.html(response,request.method==="HEAD"?"":recoveryPage(await ownerLogin.configured(),authorized));
+      }
+      if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
+      if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
+      if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
+      const body=await this.readBody(request,authorized?750000:1024);if(body===undefined)return this.json(response,413,{error:"Request too large."});
+      try{
+        const data=JSON.parse(body);
+        if(data.action==="sign-in"){
+          if(ownerLogin.throttled())return this.json(response,429,{error:"Too many sign-in attempts. Try again in a minute."});
+          if(!await ownerLogin.authenticate(data.key))return this.json(response,403,{error:"Invalid owner backup key."});
+          response.setHeader("Set-Cookie",await ownerLogin.cookie("/recovery"));return this.json(response,200,{signedIn:true});
+        }
+        if(!authorized)return this.json(response,403,{error:"Owner sign-in is required for recovery."});
+        const store=this.recovery??=new RecoveryStore(this.root);
+        if(data.action==="create")return this.json(response,201,await store.create(data));
+        if(data.action==="chunk")return this.json(response,200,await store.chunk(data.id,data.index,data.offset,data.bytes));
+        if(data.action==="start")return this.json(response,202,await store.start(data.id));
+        if(data.action==="delete-recording"){if(!this.queue)throw Error("Export queue is unavailable.");const sessionID=await store.readySession(data.id);return this.json(response,200,await this.queue.whileIdle(sessionID,()=>store.deleteRecording(data.id)));}
+        if(data.action==="remove")return this.json(response,200,await store.remove(data.id));
+        throw Error("Unknown recovery action.");
+      }catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Recovery request failed."});}
+    }
     if(url.pathname==="/admin"||url.pathname==="/admin/"){
       if(request.method==="GET"||request.method==="HEAD"){
         if(await ownerLogin.authorized(request.headers.cookie)){response.writeHead(303,{Location:"/admin/control"});response.end();return;}
@@ -203,7 +238,7 @@ export class DownloadService {
         return this.json(response,200,await new RecordingNoticesAdmin(this.root,this.settings).list());
       }
       if(request.method==="GET"&&url.searchParams.get("diagnostics")==="download"){response.setHeader("Content-Disposition",'attachment; filename="witness-host-metrics.json"');return this.json(response,200,this.diagnostics?.history()??{intervalSeconds:15,maximumSamples:240,samples:[]});}
-      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload?.()??{running:0,queued:0},jobs:this.queue?.diagnosticStages?.()??[]}});
+      if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),recoveryURL:this.recoveryLink(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload?.()??{running:0,queued:0},jobs:this.queue?.diagnosticStages?.()??[]}});
       if(request.method==="GET"||request.method==="HEAD")return this.html(response,request.method==="HEAD"?"":adminPage(this.ownerStatus.get()));
       if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
@@ -418,6 +453,7 @@ export class DownloadService {
   }
 
   async listen(port: number, host = "0.0.0.0"): Promise<number> {
+    await (this.recovery??=new RecoveryStore(this.root)).list();
     this.server = createServer((request,response) => {
       void this.handle(request,response).catch(error => {
         if (response.headersSent) response.destroy();
@@ -465,6 +501,7 @@ export class DownloadService {
     return (this.server.address() as import("node:net").AddressInfo).port;
   }
   async close(): Promise<void> {
+    await this.recovery?.close();
     await this.diagnostics?.stop();
     if (!this.server) return;
     for(const socket of this.sockets.clients)socket.terminate();

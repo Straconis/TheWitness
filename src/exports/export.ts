@@ -19,7 +19,7 @@ import { writeAudition } from "./audition";
 import { writeProjectZip } from "./project-zip";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile, link } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile, link, copyFile, realpath } from "node:fs/promises";
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -83,7 +83,8 @@ export async function exportSession(root: string, sessionID: string, options: Ex
   const metadata = JSON.parse(await readFile(path.join(directory, "session.json"), "utf8"));
   if (metadata.state !== "completed") throw new Error("Only completed sessions can be exported; interrupted or failed sessions require recovery.");
   if (!Array.isArray(metadata.tracks) || !metadata.tracks.length) throw new Error("Session has no audio tracks.");
-  const users = JSON.parse("{" + await readFile(path.join(directory, "audio.ogg.users"), "utf8") + "}");
+  const imported=metadata.sourceType==="audio-import";
+  const users = imported?Object.fromEntries(metadata.tracks.map((track:any)=>[track.track,true])):JSON.parse("{" + await readFile(path.join(directory, "audio.ogg.users"), "utf8") + "}");
   const id = randomUUID();
   const temporary = path.join(directory, `export-${id}.tmp`);
   const target = path.join(directory, `export-${id}`);
@@ -101,8 +102,18 @@ export async function exportSession(root: string, sessionID: string, options: Ex
       options.onProgress?.(`Synchronizing speaker ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`,sourceSeconds,`sync:${track.track}`);
       options.signal?.throwIfAborted();
       if (!Number.isInteger(track.track) || track.track < 1 || !users[track.track]) throw new Error("Invalid session track metadata.");
-      const ogg = path.join(temporary, `track-${track.track}.ogg`);
-      await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"),options.signal);
+      // Imported media is already synchronized. Decode lossless sources directly,
+      // without passing them through Craig correction or a lossy Opus generation.
+      const ogg = path.join(temporary, `${imported&&format!=="ogg"?"source":"track"}-${track.track}.${imported&&format!=="ogg"?"flac":"ogg"}`);
+      let importedSource:string|undefined;
+      if(imported){
+        if(track.sourceFile!==`source-track-${track.track}.flac`)throw Error("Invalid imported source.");
+        const source=await realpath(path.join(directory,track.sourceFile));
+        if(path.dirname(source)!==await realpath(directory))throw Error("Invalid imported source.");
+        importedSource=source;
+        if(format==="ogg")await convert(["-i",source,...(start>0?["-ss",String(start)]:[]),...(end!==undefined?["-t",String(end-start)]:[]),"-c:a","libopus",ogg],ffmpegPath(options),options.signal);
+        else await copyFile(source,ogg,2);
+      }else await correct(directory, track.track, ogg, options.correctorPath ?? path.resolve(__dirname, "../../bin/oggcorrect"),options.signal);
       if ((await stat(ogg)).size === 0) throw new Error(`Track ${track.track} produced no audio.`);
       if(options.includeRaw){
         options.onProgress?.(`Saving uncut original ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`,sourceSeconds,`raw:${track.track}`);
@@ -111,12 +122,12 @@ export async function exportSession(root: string, sessionID: string, options: Ex
           if(!/^browser-track-\d+\.pcm$/.test(track.pcmFile))throw Error("Invalid browser source.");
           const delay=Math.max(0,Math.round((track.pcmStart??0)-(metadata.audioOrigin??0)));
           await convert(["-f","s16le","-ar","48000","-ac","2","-i",path.join(directory,track.pcmFile),"-af",`adelay=${delay}S:all=1`,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
-        }else await convert(["-i",ogg,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
+        }else await convert(["-i",importedSource??ogg,"-c:a","flac",path.join(temporary,file)],ffmpegPath(options),options.signal);
         rawTracks.push({file,userID:track.id,username:track.username});
       }
       const excerpt=[...(start>0?["-ss",String(start)]:[]),...(end!==undefined?["-t",String(end-start)]:[])];
       // Only Ogg output needs a trimmed Opus file; other formats trim while decoding, avoiding a second lossy Opus generation.
-      if(excerpt.length&&format==="ogg"){
+      if(excerpt.length&&format==="ogg"&&!imported){
         options.onProgress?.(`Trimming speaker ${manifest.length+1} of ${metadata.tracks.length}: ${track.username}`,clipSeconds,`encode:${track.track}`);
         const trimmed=path.join(temporary,`trim-${track.track}.ogg`);
         await convert(["-i",ogg,...excerpt,"-c:a","libopus",trimmed],ffmpegPath(options),options.signal);

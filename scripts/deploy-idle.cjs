@@ -10,6 +10,12 @@ try{
   const metadata=JSON.parse(fs.readFileSync(path.join(root,entry.name,'session.json'),'utf8'));
   if(metadata.state==='recording')process.exit(1);
  }
+ const recovery=path.join(root,'recovery');
+ if(fs.existsSync(recovery))for(const entry of fs.readdirSync(recovery,{withFileTypes:true})){
+  if(!entry.isDirectory()||!/^[0-9a-f-]{36}$/i.test(entry.name))continue;
+  const file=path.join(recovery,entry.name,'state.json');
+  if(fs.existsSync(file)&&JSON.parse(fs.readFileSync(file,'utf8')).state==='importing')process.exit(1);
+ }
  const jobs=path.join(root,'jobs');
  if(fs.existsSync(jobs))for(const name of fs.readdirSync(jobs)){
   if(!name.endsWith('.json'))continue;

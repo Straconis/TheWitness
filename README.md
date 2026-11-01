@@ -517,3 +517,7 @@ Recording notices now use shared bot defaults in owner `/admin`: one start sound
 When adding an intro, select **Also include a mix without the intro** to put both mixes in the ZIP. This requires mixed audio (either the multi-track mix checkbox or a single-track mixed format). The extra mix starts directly with the session audio; the option is off by default. Speech cleanup allows up to 24 hours per track, stops after five minutes without advancing audio progress, and remains cancellable.
 
 Automatic speech-cleanup workers now use the resource admission pool: up to three independent speakers on capable hosts, with one CPU core and 1 GiB RAM reserved. Two-core hosts and low-space exports stay sequential. Set `EXPORT_PARALLEL_TRACKS=off` to force serial processing. Export status pages and Discord job status explain known processing failures, including older saved timeouts. Idle connections created by Auto Join leave after 60 continuous seconds without human participants; reconnecting resets the countdown and active recordings are preserved.
+
+### Recover existing recordings
+
+The owner-only `/recovery` page imports Soundcraft, Adobe Audition and Audacity projects, ZIP bundles, or source audio into the ordinary Witness cleanup and download workflow. See [Audio recovery](docs/AUDIO-RECOVERY.md) for supported formats, sign-in, resumable uploads and limits.

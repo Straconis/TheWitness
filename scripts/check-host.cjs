@@ -7,6 +7,7 @@ check('Native Opus encoder',()=>{const {OpusEncoder}=require('@discordjs/opus');
 check('Discord encryption module',()=>{require('@snazzah/davey');});
 check('Compiled application',()=>{if(!existsSync(path.resolve(__dirname,'../dist/index.js')))throw Error('Run the build before packaging.');});
 for(const name of ['ffmpeg','oggcorrect'])check(name,()=>{const file=path.resolve(__dirname,'../bin',name);chmodSync(file,0o755);const result=spawnSync(file,name==='ffmpeg'?['-version']:[],{input:Buffer.alloc(0),timeout:10000});if(result.error)throw result.error;if(name==='ffmpeg'&&result.status!==0)throw Error(result.stderr.toString());});
+check('Audio recovery Python runtime',()=>{const result=spawnSync('python3',['-I','-c','import sqlite3,zipfile,xml.etree.ElementTree,resource'],{timeout:10000,encoding:'utf8'});if(result.error||result.status!==0)throw Error('Audio recovery needs Python 3 with SQLite and ZIP support.');if(!existsSync(path.resolve(__dirname,'recover-audio.py')))throw Error('Recovery importer script is missing from the release.');});
 check('Loudness filter',()=>{const result=spawnSync(path.resolve(__dirname,'../bin/ffmpeg'),['-hide_banner','-filters'],{timeout:10000,encoding:'utf8'});if(result.error||result.status!==0||! /\bloudnorm\b/.test(result.stdout))throw Error('Rebuild bundled FFmpeg with loudnorm enabled before upgrading.');});
 // The transcription checks wait for the asynchronous whisper-cli probe (the running bot never waits for it).
 (async()=>{
