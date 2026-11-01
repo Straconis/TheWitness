@@ -13,15 +13,15 @@ test('attachment replies report queued and immediate processing, cancellation, a
   const client=createDiscordClient(undefined,queue);client.user={id:'bot',username:'Offline Witness'};
   client.guilds.set('123',{id:'123',name:'Offline guild',members:new Map(),roles:new Map(),channels:new Map()});
   for(const scenario of [['queued','running','cancelled'],['running','failed']]){
-  states=scenario;polls=0;job.state='queued';job.error='private backend failure detail';
+  states=scenario;polls=0;job.state='queued';job.error='Audio tool timed out.';job.failureStage='Cleaning speech: Alice';
   const messages=[];let done;const finished=new Promise(resolve=>done=resolve);
-  client.emit('interactionCreate',{type:2,data:{name:'export',options:[{name:'session',value:session.id},{name:'format',value:'wav'}]},guildID:'123',member:{id:'member',roles:[],permissions:{has:()=>true}},channel:{id:'text'},acknowledged:false,defer:async function(){this.acknowledged=true;},editOriginalMessage:async body=>{messages.push(body.content);if(body.content.includes('was cancelled')||body.content.includes('failed. Your recording'))done();}});
+  client.emit('interactionCreate',{type:2,data:{name:'export',options:[{name:'session',value:session.id},{name:'format',value:'wav'}]},guildID:'123',member:{id:'member',roles:[],permissions:{has:()=>true}},channel:{id:'text'},acknowledged:false,defer:async function(){this.acknowledged=true;},editOriginalMessage:async body=>{messages.push(body.content);if(body.content.includes('was cancelled')||body.content.includes('failed:'))done();}});
   await Promise.race([finished,new Promise((_,reject)=>timer=setTimeout(()=>reject(Error('Export reply timeout: '+messages.join(' | '))),12000))]);
   if(scenario[0]==='queued')assert.ok(messages.some(text=>text.includes('position 1')&&text.includes(job.id)));
   else assert.ok(!messages.some(text=>text.includes('position 1')));
   assert.ok(messages.some(text=>text.includes('now processing')&&text.includes(job.id)));
   if(scenario.at(-1)==='cancelled')assert.equal(messages.at(-1),`Export job ${job.id} was cancelled.`);
-  else {assert.match(messages.at(-1),/failed\. Your recording is still saved/);assert.ok(messages.at(-1).includes('/exportjob action:status job:'+job.id));assert.ok(!messages.at(-1).includes(job.error));}
+  else {assert.match(messages.at(-1),/failed: Audio processing exceeded its time limit during Cleaning speech: Alice/);assert.ok(messages.at(-1).includes('original recording is preserved'));assert.ok(messages.at(-1).includes('/exportjob action:status job:'+job.id));assert.ok(!messages.at(-1).includes(job.error));}
   assert.ok(!messages.some(text=>text.includes('Could not export')));clearTimeout(timer);
   }
  }finally{clearTimeout(timer);await recordings.shutdown();await closeRecordingPanels();await rm(root,{recursive:true,force:true});}
