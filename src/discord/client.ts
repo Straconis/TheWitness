@@ -1,3 +1,5 @@
+import {IdleVoice} from "./idle-voice";
+import {savedExportFailure} from "../exports/failure";
 import {ServerAccessStore,SERVER_BLOCKED_MESSAGE} from "../storage/server-access";
 import {BotStatusStore,statusActivities,isApplicationOwner} from "./bot-status";
 import { backupMode,resolveBackupProjects,ASK_CHOICE_REQUIRED } from "../exports/soundcraft-backup";
@@ -43,11 +45,12 @@ export const recordings = new RecordingManager(config.recordingPath,undefined,se
 const activeVoiceChannels = new Map<string, string>();
 const getSettings = (guildID: string) => settingsStore.get(guildID);
 let recordingPanels:RecordingPanels|undefined;
+let idleVoice:IdleVoice|undefined;
 let eventRecorder:EventRecording|undefined;
 let eventOccupancyTimer:NodeJS.Timeout|undefined;
 let scheduleRunner:ScheduleRunner|undefined;
 /** Stop event and schedule automation so it cannot start or stop recordings during shutdown. */
-export async function closeAutomation():Promise<void>{if(eventOccupancyTimer)clearInterval(eventOccupancyTimer);const results=await Promise.allSettled([(async()=>eventRecorder?.close())(),(async()=>scheduleRunner?.close())()]);const errors=results.filter(result=>result.status==="rejected").map(result=>(result as PromiseRejectedResult).reason);if(errors.length)throw new AggregateError(errors,"Automation shutdown failed.");}
+export async function closeAutomation():Promise<void>{idleVoice?.close();if(eventOccupancyTimer)clearInterval(eventOccupancyTimer);const results=await Promise.allSettled([(async()=>eventRecorder?.close())(),(async()=>scheduleRunner?.close())()]);const errors=results.filter(result=>result.status==="rejected").map(result=>(result as PromiseRejectedResult).reason);if(errors.length)throw new AggregateError(errors,"Automation shutdown failed.");}
 export async function closePanels():Promise<void>{await recordingPanels?.close();}
 export async function closeRecordingPanels():Promise<void>{try{await closeAutomation();}finally{await closePanels();}}
 const exportJobs = new Set<string>();
@@ -243,6 +246,10 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     await panels.update();
   };
 
+  const idle=new IdleVoice((guildID,owner)=>{
+    const guild=client.guilds.get(guildID),connection=client.voiceConnections.get(guildID),channel=guild?.channels.get(owner.channelID);
+    return {sameConnection:connection===owner.connection&&connection?.channelID===owner.channelID,recording:recordings.sessions.has(guildID),hasHumans:guild?.shard.ready&&channel?.type===2?channel.voiceMembers.some(member=>!member.bot):undefined};
+  },guildID=>{const guild=client.guilds.get(guildID);if(guild){leaveVoiceChannel(guild);console.log(`[AutoJoin] Left empty voice channel in ${guildID}`);}});idleVoice=idle;
   const events=new EventRecording(settingsStore,recordings,async event=>{
     const guild=client.guilds.get(event.guildID);if(!guild||!event.channelID)throw new UserError("Event voice channel unavailable.");
     const session=await startRecording(client,guild,event.channelID,event.name.replace(/[\x00-\x1f\x7f]/g," ").trim().slice(0,120)||"Discord event");
@@ -253,11 +260,11 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
     return channel.voiceMembers.some(member=>!member.bot);
   });eventRecorder=events;
   // A periodic recheck also recovers after gateway interruptions or missed voice updates.
-  eventOccupancyTimer=setInterval(()=>events.recheck(),30_000);eventOccupancyTimer.unref();
-  client.on("voiceChannelJoin",(_member,channel)=>events.voiceChanged(channel.guild.id,channel.id));
-  client.on("voiceChannelLeave",(_member,channel)=>events.voiceChanged(channel.guild.id,channel.id));
+  eventOccupancyTimer=setInterval(()=>{events.recheck();idle.recheck();},30_000);eventOccupancyTimer.unref();
+  client.on("voiceChannelJoin",(_member,channel)=>{events.voiceChanged(channel.guild.id,channel.id);idle.changed(channel.guild.id,channel.id);});
+  client.on("voiceChannelLeave",(_member,channel)=>{events.voiceChanged(channel.guild.id,channel.id);idle.changed(channel.guild.id,channel.id);});
   client.on("voiceChannelSwitch",(_member,newChannel,oldChannel)=>{
-    events.voiceChanged(oldChannel.guild.id,oldChannel.id);events.voiceChanged(newChannel.guild.id,newChannel.id);
+    events.voiceChanged(oldChannel.guild.id,oldChannel.id);events.voiceChanged(newChannel.guild.id,newChannel.id);idle.changed(oldChannel.guild.id,oldChannel.id);idle.changed(newChannel.guild.id,newChannel.id);
   });
   client.on("guildScheduledEventUpdate",event=>{void events.update({id:event.id,guildID:event.guild.id,channelID:(event as unknown as {channel?:{id:string}}).channel?.id??null,entityType:event.entityType,status:event.status,name:event.name}).catch(error=>console.error("[Event recording]",error));});
 
@@ -309,6 +316,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
           console.log(`[AutoRecord] Started session ${session.id}`);
           await panels.ensure(channel.id,session).catch(error=>console.warn("[Panel] Could not post in voice-channel chat; /status remains available.",error));
         } else await joinVoiceChannel(client, guild, channel.id);
+        const connection=client.voiceConnections.get(guild.id);if(connection)idle.own(guild.id,channel.id,connection);
       });
     } catch (error) {
       console.error("[AutoJoin] Failed:", error);
@@ -422,7 +430,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const job=exportQueue.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");await interaction.defer(64);
       if(action==="cancel"){await exportQueue.cancel(id,guildID);await interaction.editOriginalMessage({content:"Cancellation requested. Your original recording is preserved. Files already uploaded to a cloud account are not deleted."});return;}
       if(action==="retry"){const next=await exportQueue.retry(id,guildID);await interaction.editOriginalMessage({content:`Retry queued: ${next.id}${downloads?"\n"+downloads.jobLink(next.id):""}`});return;}
-      const position=exportQueue.position(job.id);await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${position?queuePositionText(position,job.stage):job.stage??"Waiting"}`});return;
+      const position=exportQueue.position(job.id);await interaction.editOriginalMessage({content:`Job ${job.id}: ${job.state} — ${position?queuePositionText(position,job.stage):job.stage??"Waiting"}${job.state==="failed"?"\n"+savedExportFailure(job):""}`});return;
     }
     if(commandName==="eventrecord"){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required to configure event recording.",flags:64});return;}
@@ -551,9 +559,9 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
             await interaction.editOriginalMessage({content:`Export job ${job.id} was cancelled.`}).catch((error:unknown)=>console.warn("[Export] Could not update cancellation status:",error));return;
           }
           if(job.state === "failed"){
-            await interaction.editOriginalMessage({content:`Export job ${job.id} failed. Your recording is still saved.\nCheck it with /exportjob action:status job:${job.id}`}).catch((error:unknown)=>console.warn("[Export] Could not update failure status:",error));return;
+            await interaction.editOriginalMessage({content:`Export job ${job.id} failed: ${savedExportFailure(job)}\nCheck it with /exportjob action:status job:${job.id}`}).catch((error:unknown)=>console.warn("[Export] Could not update failure status:",error));return;
           }
-          if (job.state !== "completed" || !job.directory) throw new Error(job.error ?? `Export ${job.state}.`);
+          if (job.state !== "completed" || !job.directory) throw new UserError(`Export ${job.state}.`);
           directory = path.join(config.recordingPath, job.sessionID, job.directory);
         } else directory = await exportSession(config.recordingPath, id, { format, mix, trackFormat, backupProjects: resolveBackupProjects(backupMode(settings), format, backupProjects) });
         if (downloads) {

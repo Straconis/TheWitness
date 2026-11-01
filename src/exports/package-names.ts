@@ -8,6 +8,11 @@ export function packageNames(manifest:any):Map<string,string>{
   for(let count=2;used.has(name.toLowerCase());count++)name=base.slice(0,dot)+` (${count})`+base.slice(dot);
   names.set(manifest.mix,name);
  }
+ if(typeof manifest.mixWithoutIntro==="string"&&/^mix-no-intro\.(ogg|wav|flac|mp3|m4a)$/.test(manifest.mixWithoutIntro)){
+  const base=mixedTrackName(manifest.mixWithoutIntro,{...manifest,mixHasIntro:false,mixName:manifest.mixName?manifest.mixName.replace(/\.(ogg|wav|flac|mp3|m4a|aac)$/i,"")+" without intro":undefined}),dot=base.lastIndexOf('.'),used=new Set([...names.values()].map(name=>name.toLowerCase()));let name=base;
+  for(let count=2;used.has(name.toLowerCase());count++)name=base.slice(0,dot)+` (${count})`+base.slice(dot);
+  names.set(manifest.mixWithoutIntro,name);
+ }
  return names;
 }
 const xml=(text:string)=>text.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));
@@ -16,6 +21,7 @@ export function packageFileData(file:string,data:Buffer,names:ReadonlyMap<string
  if(file==="manifest.json"){
   const manifest=JSON.parse(data.toString("utf8"));
   for(const key of ["tracks","rawTracks"])if(Array.isArray(manifest[key]))manifest[key]=manifest[key].map((track:any)=>({...track,file:names.get(track.file)??track.file}));
+  if(manifest.mixWithoutIntro)manifest.mixWithoutIntro=names.get(manifest.mixWithoutIntro)??manifest.mixWithoutIntro;
   if(manifest.mix)manifest.mix=names.get(manifest.mix)??manifest.mix;
   if(manifest.loudness?.tracks)manifest.loudness.tracks=Object.fromEntries(Object.entries(manifest.loudness.tracks).map(([name,value])=>[names.get(name)??name,value]));
   return Buffer.from(JSON.stringify(manifest,null,2));

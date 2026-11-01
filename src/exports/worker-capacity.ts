@@ -1,4 +1,4 @@
-/** Experimental admission policy and worker pool. Not connected to production exports. */
+/** Resource-bounded admission for independent speaker processing. */
 import {availableParallelism,totalmem,freemem} from "node:os";
 import {readFile,statfs} from "node:fs/promises";
 import path from "node:path";

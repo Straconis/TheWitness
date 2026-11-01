@@ -1,6 +1,6 @@
 import {UserError} from "../errors";
 export type DownloadNaming = "date" | "date-channel" | "original";
-export interface NamingManifest {startedAt?:string;guildName?:string;guildID?:string;channelName?:string;channelID?:string;title?:string;sessionID?:string;tracks?:Array<{file:string;username:string}>;rawTracks?:Array<{file:string;username:string}>;mix?:string;mixName?:string;mixHasIntro?:boolean;intro?:unknown;trim?:{start:number;end?:number}}
+export interface NamingManifest {startedAt?:string;guildName?:string;guildID?:string;channelName?:string;channelID?:string;title?:string;sessionID?:string;tracks?:Array<{file:string;username:string}>;rawTracks?:Array<{file:string;username:string}>;mix?:string;mixWithoutIntro?:string;mixName?:string;mixHasIntro?:boolean;intro?:unknown;trim?:{start:number;end?:number}}
 type NamedTrack={file:string;username:string};
 const trackNumber=(file:string)=>/track-(\d+)\./.exec(file)?.[1];
 /** Windows, macOS and Linux safe; Unicode letters stay, separators, controls and bidi overrides do not. */
@@ -51,6 +51,7 @@ export function mixedTrackName(file:string,manifest:NamingManifest):string{
  return name;
 }
 export function downloadName(file:string,manifest:NamingManifest,style:DownloadNaming):string{
+ if(file===manifest.mixWithoutIntro)return mixedTrackName(file,{...manifest,mixHasIntro:false,mixName:manifest.mixName?manifest.mixName.replace(/\.(ogg|wav|flac|mp3|m4a|aac)$/i,"")+" without intro":undefined});
  if(file===manifest.mix)return mixedTrackName(file,manifest);
  const member=packagedTrackNames(manifest.tracks??[],manifest.rawTracks??[]).get(file);if(member)return member;
  if(style==="original")return file;

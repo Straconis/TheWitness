@@ -23,6 +23,6 @@ export async function assertSpeechCleanup(tool=defaultAudioTool()):Promise<void>
 export const SPEECH_CLEANUP_FILTER="apad=pad_len=1200,highpass=f=70:p=2,afftdn=nr=6:nf=-50:tn=1:gs=3,atrim=start_sample=1200,asetpts=PTS-STARTPTS,equalizer=f=3000:t=q:w=0.7:g=1.5,alimiter=limit=0.95:level=false:latency=true";
 export async function cleanSpeech(file:string,codec:string,tool:string,signal?:AbortSignal):Promise<void>{
  const output=path.join(path.dirname(file),"cleanup-"+path.basename(file));
- try{await runTool(tool,["-nostdin","-v","error","-n","-i",file,"-af",SPEECH_CLEANUP_FILTER,"-ar","48000","-c:a",codec,...(codec==="pcm_s16le"?["-rf64","auto"]:[]),...(codec==="aac"?["-f","mp4"]:[]),output],signal);await rename(output,file);}
+ try{await runTool(tool,["-nostdin","-v","error","-n","-i",file,"-af",SPEECH_CLEANUP_FILTER,"-ar","48000","-c:a",codec,...(codec==="pcm_s16le"?["-rf64","auto"]:[]),...(codec==="aac"?["-f","mp4"]:[]),output],signal,24*60*60*1000,5*60*1000);await rename(output,file);}
  finally{await rm(output,{force:true});}
 }

@@ -61,3 +61,17 @@ test('operator failure logs exclude normal export cancellation and shutdown',asy
  try{const session=await recording(root,'guild');queue=new ExportQueue(root,async(_root,_id,options)=>{await new Promise((resolve,reject)=>{if(options.signal.aborted)reject(options.signal.reason);else options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});return root;});await queue.load();console.error=(...args)=>errors.push(args);const first=await queue.enqueue(session,'guild','wav');await until(()=>queue.active.has(first.id));await queue.cancel(first.id,'guild');await until(()=>first.state==='cancelled');const second=await queue.enqueue(session,'guild','wav');await until(()=>queue.active.has(second.id));await queue.close();assert.equal(second.state,'queued');assert.ok(!errors.some(args=>/Job .* failed/.test(String(args[0]))));}
  finally{console.error=original;await queue?.close();await rm(root,{recursive:true,force:true});}
 });
+
+test('dual mix requires both intro and mixing and is distinct in queue deduplication',async()=>{
+ const fs=require('node:fs/promises'),{createHash}=require('node:crypto');const root=await mkdtemp(path.join(os.tmpdir(),'witness-dual-queue-'));let queue;
+ try{
+  const id=await recording(root,'guild'),introID='00000000-0000-4000-8000-000000000001',dir=path.join(root,'server-intros',createHash('sha256').update('guild').digest('hex'));
+  await fs.mkdir(dir,{recursive:true});await fs.writeFile(path.join(dir,introID+'.json'),JSON.stringify({id:introID,name:'Theme',seconds:1}));await fs.writeFile(path.join(dir,introID+'.pcm'),Buffer.alloc(192000));
+  queue=new ExportQueue(root);await queue.load(false);
+  const neither=await queue.enqueue(id,'guild','wav',false,{mixWithoutIntro:true});assert.equal(neither.mixWithoutIntro,false);
+  const noIntro=await queue.enqueue(id,'guild','wav',true,{mixWithoutIntro:true});assert.equal(noIntro.mixWithoutIntro,false);
+  const noMix=await queue.enqueue(id,'guild','wav',false,{introID,mixWithoutIntro:true});assert.equal(noMix.mixWithoutIntro,false);
+  const single=await queue.enqueue(id,'guild','wav',true,{introID});const dual=await queue.enqueue(id,'guild','wav',true,{introID,mixWithoutIntro:true});assert.notEqual(single.id,dual.id);assert.equal(dual.mixWithoutIntro,true);
+  assert.equal((await queue.enqueue(id,'guild','wav',true,{introID,mixWithoutIntro:true})).id,dual.id);
+ }finally{await queue?.close();queue?.releaseIntroReferences();await rm(root,{recursive:true,force:true});}
+});

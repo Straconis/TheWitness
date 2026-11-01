@@ -9,7 +9,7 @@ import path from "node:path";
 import { crc32,createDeflateRaw } from "node:zlib";
 import {packageFileData,packageNames} from "./package-names";
 async function projectZipEntries(directory:string):Promise<Array<[file:string,member:string,data?:Buffer]>>{
-  let entries=(await readdir(directory,{withFileTypes:true})).filter(entry=>entry.isFile()).map(entry=>entry.name).filter(name=>/^(session\.(sesx|aup3?|scraft)|backup-audition\.sesx|backup-audacity\.aup3?|BACKUP-PROJECTS\.txt|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(name)).sort();
+  let entries=(await readdir(directory,{withFileTypes:true})).filter(entry=>entry.isFile()).map(entry=>entry.name).filter(name=>/^(session\.(sesx|aup3?|scraft)|backup-audition\.sesx|backup-audacity\.aup3?|BACKUP-PROJECTS\.txt|manifest\.json|notes\.json|transcript\.(txt|srt|vtt)|mix(?:-no-intro)?\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/.test(name)).sort();
   if(entries.includes("session.aup3"))entries=entries.filter(name=>!/^track-\d+\.(wav|flac)$/.test(name));
   // Cached legacy Audacity projects read media from "<AUP name>_data"; that folder holds the only packaged copy, shared by every project in the ZIP.
   const media=entries.includes("session.aup")?"session_data":entries.includes("backup-audacity.aup")?"backup-audacity_data":undefined;

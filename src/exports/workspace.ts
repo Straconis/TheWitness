@@ -7,3 +7,5 @@ export function checkExportSpace(bytes?:number):Promise<void>|undefined{return c
 const progress=new AsyncLocalStorage<(seconds:number)=>void>();
 export function withExportProgress<T>(report:(seconds:number)=>void,work:()=>Promise<T>):Promise<T>{return progress.run(report,work);}
 export function exportProgressReporter():((seconds:number)=>void)|undefined{return progress.getStore();}
+
+export function exportSpaceChecksActive():boolean{return !!checks.getStore();}

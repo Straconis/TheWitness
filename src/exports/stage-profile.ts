@@ -5,7 +5,7 @@ export type ExportStageProfile=Partial<Record<ExportStageKind,ExportStageTiming>
 function category(id?:string):ExportStageKind{
  const prefix=id?.split(':')[0];
  if(prefix==='sync')return 'synchronize';if(prefix==='raw')return 'originals';
- if(['encode','edit'].includes(prefix??''))return 'conversion';if(prefix==='clean')return 'cleanup';
+ if(['encode','edit'].includes(prefix??''))return 'conversion';if(prefix==='clean'||prefix==='cleanup-batch')return 'cleanup';
  if(['scan','cut'].includes(prefix??''))return 'silence';
  if(['level','intro-level','mix-level','mix-intro-level','mix-normalize'].includes(prefix??''))return 'loudness';
  if(['pad','intro'].includes(prefix??''))return 'intro';if(['mix','mix-combine'].includes(prefix??''))return 'mix';
