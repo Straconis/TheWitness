@@ -1,8 +1,10 @@
+import {recordingHours} from "../storage/bot-defaults";
 import type {ServerAccessStore} from "../storage/server-access";
 import {handleStartSoundError} from "../exports/start-sound";
 import { SessionSync } from "./sync";
 import type {SettingsStore} from "../storage/settings";
 import { assertDeploymentIdle } from "../storage/deployment";
+import { assertStorageCap } from "../storage/retention-policy";
 import { EventEmitter } from "node:events";
 import type Eris from "eris";
 import { setTimeout as delay } from "node:timers/promises";
@@ -38,10 +40,11 @@ export class RecordingManager {
   if(existing){if(existing.channelID!==channelID)throw new Error("Stop the existing recording before changing channels.");return existing;}
   await assertDeploymentIdle(this.root);
   if(await this.diskCritical())throw Error("Disk space is critically low. Free up space before starting a recording.");
+  if(this.settings?.retentionPolicy)await assertStorageCap(this.root,guild.id,this.settings.retentionPolicy.get());
   if(this.shuttingDown)throw Error("The Witness is shutting down.");
   await assertDeploymentIdle(this.root);
   this.assertServerAllowed(guild.id);
-  const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,this.settings?.get(guild.id).recordingDurationHours,guild.name);
+  const session=await RecordingSession.create(this.root,guild.id,channelID,guild.channels?.get(channelID)?.name,recordingHours(this.settings?.get(guild.id).recordingDurationHours),guild.name);
   try{this.assertServerAllowed(guild.id);if(this.shuttingDown)throw Error("The Witness is shutting down.");await assertDeploymentIdle(this.root);this.bind(guild,connection,session,connector);}catch(error){await session.close(error as Error).catch(()=>{});throw error;}
   this.sessions.set(guild.id,session);
   session.onDurationWarning=async minutes=>{if(this.sessions.get(guild.id)===session)await this.onDurationWarning?.(session,minutes);};

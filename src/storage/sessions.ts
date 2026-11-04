@@ -10,6 +10,16 @@ export async function getSession(root: string, id: string, guildID: string): Pro
   if(typeof session.startedAt!=="string"||!Number.isFinite(Date.parse(session.startedAt))||typeof session.channelID!=="string"||!["recording","completed","failed","interrupted"].includes(session.state)||!Array.isArray(session.tracks)||session.tracks.some(track=>!track||!Number.isSafeInteger(track.track)||track.track<1||typeof track.id!=="string"||typeof track.username!=="string")||new Set(session.tracks.map(track=>track.track)).size!==session.tracks.length)throw new UserError("Recording metadata is damaged; check the bot logs.");
   return session;
 }
+/** Every readable session on this host, including those of servers the bot has left. */
+export async function listAllSessions(root: string): Promise<SavedSession[]> {
+  const sessions: SavedSession[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !sessionIDPattern.test(entry.name)) continue;
+    try { const {guildID} = JSON.parse(await readFile(path.join(root, entry.name, "session.json"), "utf8")); sessions.push(await getSession(root, entry.name, guildID)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EACCES") throw error; }
+  }
+  return sessions;
+}
 export async function listSessions(root: string, guildID: string): Promise<SavedSession[]> {
   const sessions: SavedSession[] = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {

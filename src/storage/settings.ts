@@ -1,4 +1,6 @@
 import {RecordingNotices} from "./recording-notices";
+import {BotDefaultsStore} from "./bot-defaults";
+import {RetentionPolicy} from "./retention-policy";
 import path from "node:path";
 import {validateStartSound} from "../exports/start-sound";
 import {validateBackupMode,SoundcraftBackupMode} from "../exports/soundcraft-backup";
@@ -25,7 +27,9 @@ export class SettingsStore {
   private values: Record<string, GuildSettings> = {};
   private queue: Promise<void> = Promise.resolve();
   readonly recordingNotices:RecordingNotices;
-  constructor(private file: string) {this.recordingNotices=new RecordingNotices(path.dirname(file));}
+  readonly botDefaults:BotDefaultsStore;
+  readonly retentionPolicy:RetentionPolicy;
+  constructor(private file: string) {this.recordingNotices=new RecordingNotices(path.dirname(file));this.botDefaults=new BotDefaultsStore(path.dirname(file));this.retentionPolicy=new RetentionPolicy(path.dirname(file));}
   async load(): Promise<void> {
     try {
       const data = JSON.parse(await readFile(this.file,"utf8"));
@@ -37,7 +41,8 @@ export class SettingsStore {
       }
       this.values = data;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    await this.recordingNotices.load();
+    await this.recordingNotices.load();await this.botDefaults.load();
+    await this.retentionPolicy.load();
   }
   all():Array<[string,GuildSettings]>{return Object.keys(this.values).map(id=>[id,this.get(id)]);}
   get(id:string):GuildSettings{return structuredClone(this.values[id]??{autoJoin:false,autoRecord:false});}

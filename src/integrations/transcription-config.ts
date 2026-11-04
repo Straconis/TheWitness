@@ -65,6 +65,11 @@ export function stopVadProbes():void{probingStopped=true;for(const state of prob
 /** For tests and in-process restarts. */
 export function resetVadProbes():void{stopVadProbes();probes.clear();probingStopped=false;}
 
+let allowed=true;
+/** The owner's bot-wide switch on /admin. Off means no new transcripts, whatever this host has installed. */
+export function transcriptionAllowed():boolean{return allowed;}
+export function setTranscriptionAllowed(value:boolean):void{allowed=value;}
+
 export function transcriptionConfig(){
  const bundled=path.resolve(__dirname,"../../bin"),executable=process.env.TRANSCRIPTION_EXECUTABLE?.trim()||(existsSync(path.join(bundled,"whisper-cli"))?path.join(bundled,"whisper-cli"):""),model=process.env.TRANSCRIPTION_MODEL?.trim()||["small.en","base.en"].map(name=>path.join(bundled,`models/ggml-${name}.bin`)).find(file=>existsSync(file))||"";
  // Speech detection is opt-in: an installed model is not used unless TRANSCRIPTION_VAD_MODEL names it (or "auto" selects the
@@ -83,6 +88,7 @@ function report(message:string):void{if(reportedConfigError!==message){reportedC
  * and, when none is cached, starts one in the background and answers "not ready" until it finishes.
  */
 export function transcriptionReady():boolean{
+ if(!allowed)return false;
  try{
   const config=transcriptionConfig();if(!config.executable||!config.model||!existsSync(config.executable)||!existsSync(config.model))return false;
   if(!config.vadModel)return true;
@@ -93,7 +99,8 @@ export function transcriptionReady():boolean{
  }catch(error){report(error instanceof Error?error.message:String(error));return false;}
 }
 /** "checking" while a VAD probe result is not yet known, so callers can say so instead of "not configured". */
-export function transcriptionStatus():"ready"|"checking"|"unavailable"{
+export function transcriptionStatus():"off"|"ready"|"checking"|"unavailable"{
+ if(!allowed)return "off";
  if(transcriptionReady())return "ready";
  try{const config=transcriptionConfig();if(config.vadModel&&config.executable&&config.model&&existsSync(config.executable)&&existsSync(config.model)&&cachedVadSupport(config.executable)===undefined)return "checking";}catch{/* unavailable */}
  return "unavailable";

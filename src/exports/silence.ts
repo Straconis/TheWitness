@@ -4,10 +4,11 @@ import {once} from "node:events";
 import {rename} from "node:fs/promises";
 import path from "node:path";
 import {runTool} from "./process";
+import {botDefaults,validateSilenceSeconds} from "../storage/bot-defaults";
 export interface SilenceCut {start:number;end:number}
-export function silenceSeconds(value:unknown=30):number {if(typeof value!=="number"||!Number.isFinite(value)||value<0.1||value>3600)throw Error("Silence length must be between 0.1 and 3600 seconds.");return value;}
+export function silenceSeconds(value:unknown=botDefaults().silenceSeconds):number {return validateSilenceSeconds(value);}
 /** Detect activity per speaker, rather than summing waveforms that could cancel. 100 ms windows, -50 dBFS. */
-export async function findSilenceCuts(files:string[],selected:Set<string>,ffmpeg:string,signal?:AbortSignal,minimumSeconds=30,trimEndSilence=false,trimSharedSilence=true,onProgress?:(file:string,seconds:number)=>void):Promise<{cuts:SilenceCut[];duration:number;trailingCut?:SilenceCut}>{
+export async function findSilenceCuts(files:string[],selected:Set<string>,ffmpeg:string,signal?:AbortSignal,minimumSeconds=botDefaults().silenceSeconds,trimEndSilence=false,trimSharedSilence=true,onProgress?:(file:string,seconds:number)=>void):Promise<{cuts:SilenceCut[];duration:number;trailingCut?:SilenceCut}>{
  minimumSeconds=silenceSeconds(minimumSeconds);const activity:number[]=[];let duration=0;
  for(const file of files){signal?.throwIfAborted();const combined=AbortSignal.any([...(signal?[signal]:[]),AbortSignal.timeout(30*60*1000)]);const child=spawn(ffmpeg,["-nostdin","-v","error","-i",file,"-ar","48000","-ac","2","-c:a","pcm_s16le","-f","s16le","pipe:1"],{stdio:["ignore","pipe","pipe"],signal:combined,killSignal:"SIGKILL"});deprioritize(child);const finished=processClosed(child);let stderr="",samples=0,pending=Buffer.alloc(0),reported=0;onProgress?.(file,0);child.stderr.on("data",chunk=>stderr=(stderr+chunk).slice(-2000));const closed=once(child,"close");closed.catch(()=>{});
  try{for await(const chunk of child.stdout){const bytes=pending.length?Buffer.concat([pending,chunk]):chunk;const length=bytes.length-(bytes.length%2);const count=length/2;

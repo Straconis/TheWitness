@@ -1,3 +1,5 @@
+import {botDefaults} from "../storage/bot-defaults";
+import {RECORDING_DURATION_HOURS} from "../recording/duration";
 export const helpTopics = [
   {value:"start",name:"Quick start",description:"Record, stop, find your session, and download it"},
   {value:"recording",name:"Recording & notes",description:"Voice recording, titles, notes, and live controls"},
@@ -8,7 +10,9 @@ export const helpTopics = [
   {value:"permissions",name:"Permissions & privacy",description:"Bot Wrangler roles, server settings, and deletion"},
   {value:"troubleshooting",name:"Troubleshooting & recovery",description:"Missing commands, interrupted recordings, and failed exports"}
 ] as const;
-export interface HelpContext {downloads:boolean;restricted:boolean}
+export interface HelpContext {downloads:boolean;restricted:boolean;transcriptsOff?:boolean}
+const TRANSCRIPTION_HELP="**Transcription:** the live deployment already runs Whisper on the server. Select Include a transcript or use `transcribe:true` to produce TXT, SRT, and VTT without user setup or a subscription. Self-hosting operators must configure an executable/model and processing capacity.";
+const TRANSCRIBE_OPTION_HELP="`transcribe:true` needs the configured local speech engine/model. ";
 const pages:Record<string,string>={
  sync:[
   "**Purpose:** identify audio/video offset and drift using matching cues, not automatically correct it.",
@@ -31,7 +35,7 @@ const pages:Record<string,string>={
   "Choose a topic below, or jump directly with `/help topic:Exports & formats`."
  ].join("\n\n"),
  recording:[
-  "**Recording maximum:** 8 hours by default. Manage Server admins use `/recordinglimit hours:12` (2, 4, 6, 8, 12, 16, or 24 hours); omit hours to view it. Changes apply to new recordings. Warnings at 1 hour, 30, 15, 5, and 1 minute remaining state the automatic stop time. At the limit, audio is saved normally and available for the same processing and ZIP downloads as `/stop`.",
+  "**Recording maximum:** {recordingDefault} hours by default. Manage Server admins use `/recordinglimit hours:12` ({recordingChoices} hours); omit hours to view it. Changes apply to new recordings. Warnings at 1 hour, 30, 15, 5, and 1 minute remaining state the automatic stop time. At the limit, audio is saved normally and available for the same processing and ZIP downloads as `/stop`.",
   "**`/record channel:<voice-channel> [title]`** — Select the voice channel to record; the title is optional. You can start it from text chat without joining voice yourself, provided you can view and connect to the selected channel. One recording can be active per server; different servers can record simultaneously.",
   "**`/stop`** — Finish and save the current recording, then leave voice. A second `/stop` does not delete anything.",
   "**`/status`** — Check recording state, speaker count, saved packets, voice connection, and disk space.",
@@ -42,19 +46,19 @@ const pages:Record<string,string>={
  ].join("\n\n"),
  exports:[
   "**`/export session:<session-id> [format] [track_format] [mix] [transcribe] [upload]`** — Export a **completed** recording. Get its ID with `/recordings`; recover interrupted recordings first.",
-  "**Transcription:** the live deployment already runs Whisper on the server. Select Include a transcript or use `transcribe:true` to produce TXT, SRT, and VTT without user setup or a subscription. Self-hosting operators must configure an executable/model and processing capacity.",
+  TRANSCRIPTION_HELP,
   "**Formats:** `audition` (default): ZIP with an Audition session and FLAC media. `audacity`: ZIP with a native `.aup3` project and embedded audio. `soundcraft`: native session ZIP (WAV); limited to ~3h 6m 25s per stereo track because audio loads directly into RAM. If `/dashboard` backups are set to Ask, add `backup:`. `ogg`, `wav`, `flac`, `mp3`, `aac`: individual speaker audio; AAC files use `.m4a`.",
   "**Example:** `/export session:<session-id> format:flac mix:true` adds a synchronized mix alongside speaker tracks. `format:audition track_format:wav` selects WAV instead of FLAC. Audacity and Soundcraft default to WAV; both also support FLAC.",
   "With web downloads enabled, open the returned status link and wait for **Ready**. Otherwise, exports attach in Discord with an 8 MiB limit. Web audio exports offer individual files; project formats provide a ZIP.",
   "**Private download page:** Mix: DATE - mix, plus w intro if included; select mix to rename. Multi-track buttons keep speakers separate; Single-track buttons download the combined mixdown. The ZIP media dropdown chooses FLAC, WAV, or the project default.",
   "**Choose speakers for the mixdown:** Uncheck someone (for example, Zelvik) to exclude their voice from mixed audio. Their separate track remains available in multi-track/project exports. Keep at least one speaker selected.",
-  "**Trim shared silent pauses:** Optional, off by default. Threshold: 30 seconds (0.1–3600). Cuts pauses when all selected speakers are silent; excluded speakers do not prevent cuts. The same cuts apply to every track and move notes with the timeline. Originals stay intact. Include uncut original speaker recordings adds full-length FLAC copies without processing.",
+  "**Trim shared silent pauses:** Optional, off by default. Threshold: {silence} seconds (0.1–3600). Cuts pauses when all selected speakers are silent; excluded speakers do not prevent cuts. The same cuts apply to every track and move notes with the timeline. Originals stay intact. Include uncut original speaker recordings adds full-length FLAC copies without processing.",
   "**Trim silence at the end:** optional download-page setting, off by default. Removes trailing silence after the last audible selected speaker, keeps a half-second tail, and leaves internal pauses intact unless shared-pause trimming is also enabled. Originals and the intro are preserved. Uncheck **Sync cues** in the speaker selection to trim to the conversation’s end; a selected end cue can keep the quiet gap before it.",
   "**Server intro:** Managers can upload a reusable WAV, FLAC, MP3 or Ogg (30 MB / five minutes) in `/dashboard`, for the server or a selected voice channel. Only that Discord server’s recordings can use it. Or upload a custom intro on the post-recording page for your download; it stays separate. Enable Add intro before the session audio; speaker tracks and notes start after it. Projects include an intro track; silence trimming preserves it. This option defaults off.",
   "**Normalize speaker audio:** Optional and off by default. Balances each speaker using constant gain, preserving dynamics and limiting boosts/peaks. **Match intro volume to selected speakers** independently adjusts the intro to the selected speakers’ audible level; it applies only when an intro is enabled. Quiet pauses do not drive the volume target. Neither option changes the original recording.",
   "Use the download page for speaker selection, intros, trimming and normalization.",
   "**`/exportjob action:status job:<job-id>`** — Check progress. Use `action:cancel` to cancel or `action:retry` for a failed/cancelled job. Copy the job ID from the queued-export response. Cancellation preserves the original recording; cloud files already uploaded remain.",
-  "`transcribe:true` needs the configured local speech engine/model. `upload:dropbox|google|onedrive|box` needs a connected owner cloud account. Both require the web export service. Exports share a processing queue across servers."
+  TRANSCRIBE_OPTION_HELP+"`upload:dropbox|google|onedrive|box` needs a connected owner cloud account. Both require the web export service. Exports share a processing queue across servers."
  ].join("\n\n"),
  downloads:[
   "**`/downloadnames style:date`** or **`style:date-channel`** — ZIP names such as `2026-10-01 - My Server - General Voice.zip` (date, server, channel).",
@@ -82,7 +86,7 @@ const pages:Record<string,string>={
   "**`/access mode:role role:Bot Wrangler`** — Restrict controls to that role. `mode:everyone` opens controls; `mode:status` shows the policy. All `/access` operations require **Manage Server**, but work even if that manager lacks the Wrangler role.",
   "**Manage Server is also required** for changes to `/autojoin`, `/autorecord`, `/dashboard`, `/recordinglimit`, `/schedule`, `/eventrecord`, `/channelrules`, `/retention`, and `/delete`. If role restrictions are enabled, those commands also require the Wrangler role.",
   "**`/delete session:<session-id> confirm:true`** — Permanently remove a saved recording and its exports. Check the session ID carefully.",
-  "**`/retention days:30 confirm:true`** — Automatically delete completed recordings and exports older than 30 days. `days:0` disables cleanup (the default). Active, failed, and interrupted recordings are preserved.",
+  "**`/retention days:14 confirm:true`** — Delete completed recordings and exports older than 14 days. The official bot deletes all recordings 31 days after they end, so you can shorten this but not extend it. `days:0` clears this server's setting.",
   "Recordings and command access are scoped to their server. **Private web links are bearer links:** anyone you give a valid link can use it. Changing the Wrangler role does not revoke already-shared links.",
   "The bot needs permission to view/connect to the voice channel and to send messages in the channel used for commands/panels. Ask a server manager if recording cannot start."
  ].join("\n\n"),
@@ -95,14 +99,15 @@ const pages:Record<string,string>={
   "**Intro upload failed?** Use WAV, FLAC, MP3, or Ogg audio under 30 MB and five minutes. Keep the page open until Server intro saved appears. Changing the saved intro affects future exports; already queued exports retain their selected intro version.",
   "**Silence trim removed everything?** At least one selected speaker needs audible audio. Select another speaker or turn trimming off. Unselected speakers cannot keep a quiet section in the export.",
   "**Private link expired?** Request a new dashboard, microphone, or export link through the corresponding command.",
-  "**Low disk space?** Ask the host operator to review storage. A manager can delete selected saved sessions or opt into retention; deletion is permanent.",
+  "**Low disk space?** Ask the host operator to review storage. A manager can delete selected saved sessions or shorten retention; deletion is permanent. A server over its recording storage limit cannot start new recordings until it has freed space.",
   "**Update being prepared?** New recordings/exports pause while deployment waits for existing work to finish. Try again after the update completes. For unresolved problems, give the host operator the session/job ID and the error message."
  ].join("\n\n")
 };
+function withDefaults(text:string):string{const defaults=botDefaults(),choices=RECORDING_DURATION_HOURS.filter(hours=>hours<=defaults.recordingMaxHours);return text.replace("{silence}",String(defaults.silenceSeconds)).replace("{recordingDefault}",String(defaults.recordingDefaultHours)).replace("{recordingChoices}",choices.length>1?`${choices.slice(0,-1).join(", ")}, or ${choices[choices.length-1]}`:String(choices[0]));}
 export function helpMessage(requested:unknown,context:HelpContext){
  const topic=helpTopics.find(item=>item.value===requested)??helpTopics[0];
  return {content:"",flags:64,allowedMentions:{parse:[]},embeds:[{
-  title:`The Witness · ${topic.name}`,description:pages[topic.value],color:0x9dd9ff,
+  title:`The Witness · ${topic.name}`,description:withDefaults(context.transcriptsOff?pages[topic.value]!.replace(TRANSCRIPTION_HELP,"**Transcription:** turned off right now, so `transcribe:true` will not work.").replace(TRANSCRIBE_OPTION_HELP,""):pages[topic.value]!),color:0x9dd9ff,
   fields:[{name:"This server",value:`Controls: ${context.restricted?"Bot Wrangler role required":"open to server members"}. Web downloads: ${context.downloads?"enabled":"not enabled on this host"}. Help is visible only to you.`}],
   footer:{text:"The Witness remembers. · Use the menu below or /help topic to explore."}
  }],components:[{type:1,components:[{type:3,custom_id:"witness:help",placeholder:"Choose a help topic",min_values:1,max_values:1,options:helpTopics.map(item=>({label:item.name,value:item.value,description:item.description,default:item.value===topic.value}))}]}]};

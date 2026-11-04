@@ -2,6 +2,7 @@ import {ServerAccessStore} from "./storage/server-access";
 import {BotStatusStore} from "./discord/bot-status";
 import path from "node:path";
 import { transcriptionReadyAsync } from "./integrations/transcription-config";
+import { TranscriptionSetting } from "./storage/transcription-setting";
 import { backupMode } from "./exports/soundcraft-backup";
 import {initializeStartSound} from "./exports/start-sound";
 import {cleanTransientArtifacts} from "./exports/storage";
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   await settingsStore.load();
   const serverAccess=new ServerAccessStore(path.join(config.recordingPath,"server-access.json"));await serverAccess.load();
   recordings.setServerAccess(serverAccess);
+  const transcriptionSetting=new TranscriptionSetting(path.join(config.recordingPath,"transcription-setting.json"));await transcriptionSetting.load();
   // Probe whisper-cli in the background so pages and export checks read a cached answer instead of waiting for it.
   void transcriptionReadyAsync();
   await initializeStartSound();
@@ -45,7 +47,7 @@ async function main(): Promise<void> {
   const retention=new RetentionRunner(config.recordingPath,settingsStore,recordings,exportQueue);retention.start();
   const downloads = config.downloadPort
     ? await DownloadService.create(config.recordingPath, config.downloadPublicURL!) : undefined;
-  if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); await downloads.listen(config.downloadPort!,config.downloadHost); }
+  if (downloads) { downloads.attach(exportQueue,settingsStore,recordings,storageMonitor); downloads.setTranscriptionSetting(transcriptionSetting); await downloads.listen(config.downloadPort!,config.downloadHost); }
   const botStatus=new BotStatusStore(path.join(config.recordingPath,"bot-status.json"));
   await botStatus.load();
   const client = createDiscordClient(downloads,exportQueue,botStatus,serverAccess);
