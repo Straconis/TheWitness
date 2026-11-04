@@ -27,7 +27,7 @@ test('public pages and help stop promising transcripts when they are off',()=>{
  assert.match(invitePage(),/optional local transcription/);assert.doesNotMatch(invitePage(false),/transcri/i);
  assert.match(editorPage('ask'),/id="transcribe"/);assert.doesNotMatch(editorPage('ask',false),/id="transcribe"/);
  const help=helpMessage('exports',{downloads:true,restricted:false,transcriptsOff:true}).embeds[0].description;
- assert.match(help,/turned off right now/);assert.doesNotMatch(help,/Whisper|speech engine/);assert.match(help,/`upload:dropbox/);
+ assert.match(help,/turned off right now/);assert.doesNotMatch(help,/Whisper|speech engine/);assert.match(help,/`upload:google/);
 });
 
 test('only the owner can flip the setting, and the landing page follows it at once',async()=>{

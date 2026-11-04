@@ -9,8 +9,10 @@ import { validateSync,SyncSettings } from "../recording/sync";
 import { validateSchedule,RecordingSchedule } from "../automation/schedules";
 import { validateAccess } from "../discord/access";
 import { readFile, writeFile, rename } from "node:fs/promises";
-export interface GuildSettings { endSound?:{mode:"custom"|"off";customID?:string}; soundcraftBackup?:SoundcraftBackupMode; startSound?:{mode:"default"|"custom"|"off";customID?:string}; recordingDurationHours?:number; sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
+import type { CloudProvider } from "../integrations/cloud";
+export interface GuildSettings { cloudUpload?:{provider?:CloudProvider;auto?:boolean}; endSound?:{mode:"custom"|"off";customID?:string}; soundcraftBackup?:SoundcraftBackupMode; startSound?:{mode:"default"|"custom"|"off";customID?:string}; recordingDurationHours?:number; sync?:SyncSettings; schedules?:RecordingSchedule[]; autoJoinChannels?:string[]; retentionDays?:number; autoJoin: boolean; autoRecord: boolean; downloadNaming?: "date" | "date-channel" | "original"; restrictAccess?:boolean; accessRoleID?:string; eventRecordings?:Array<{eventID:string;stopOnEnd:boolean}> }
 function validateEvents(settings:GuildSettings):void{
+ if(settings.cloudUpload!==undefined&&(typeof settings.cloudUpload!=="object"||settings.cloudUpload===null||(settings.cloudUpload.provider!==undefined&&!["google","dropbox","onedrive","box"].includes(settings.cloudUpload.provider))||(settings.cloudUpload.auto!==undefined&&typeof settings.cloudUpload.auto!=="boolean")))throw Error("Invalid cloud upload setting.");
  validateStartSound(settings.startSound);
  if(settings.endSound!==undefined){if(!["custom","off"].includes(settings.endSound.mode))throw Error("Invalid end sound mode.");validateStartSound(settings.endSound);}
  if(settings.soundcraftBackup!==undefined)validateBackupMode(settings.soundcraftBackup);

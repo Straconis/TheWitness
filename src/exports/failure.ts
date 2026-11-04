@@ -4,6 +4,8 @@ export function exportFailureMessage(error:unknown,stage?:string):string{
  const message=error instanceof Error?error.message:String(error),code=(error as NodeJS.ErrnoException|undefined)?.code;
  const step=stage&&!["Failed","Ready"].includes(stage)?` during ${stage.slice(0,180)}`:"";
  if(error instanceof UserError)return message;
+ // These messages carry only a status code, and they tell people when to reconnect their account.
+ if(/^(Cloud |Saved cloud )/.test(message))return `${message} Your original recording is preserved.`;
  if(/Audio tool timed out/.test(message))return `Audio processing exceeded its time limit${step}. Long recordings can take longer than this limit. Retry the export; if speech cleanup was selected, try turning it off. Your original recording is preserved.`;
  if(/Audio tool stalled/.test(message))return `Audio processing stopped making progress${step} and was stopped after five minutes. Retry the export; if speech cleanup was selected, try turning it off. Your original recording is preserved.`;
  if(code==="ENOSPC"||/No space left on device/.test(message))return `The server ran out of free disk space${step}. Free space or remove old exports, then retry. Your original recording is preserved.`;

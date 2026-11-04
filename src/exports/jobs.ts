@@ -20,17 +20,19 @@ import { assertDeploymentIdle } from "../storage/deployment";
 import { checkedTranscriptionConfig,transcriptionAllowed,transcriptionStatus } from "../integrations/transcription-config";
 import { AudioEdits,validateEdits } from "./edits";
 import { CloudAccounts } from "../integrations/accounts";
+import { deliverToCloud } from "./cloud-delivery";
+import { cloudUploadAllowed } from "../storage/cloud-upload-setting";
 import { writeProjectZip } from "./project-zip";
 import { existsSync } from "node:fs";
 import { transcribeExport } from "../integrations/transcription";
-import { uploadFile, CloudProvider } from "../integrations/cloud";
+import type { CloudProvider } from "../integrations/cloud";
 import { randomUUID } from "node:crypto";
 import { mkdir,readdir,readFile,writeFile,rename,rm,stat,lstat } from "node:fs/promises";
 import path from "node:path";
 import { exportSession, ExportFormat } from "./export";
 import { getSession,sessionIDPattern } from "../storage/sessions";
-type Extras={mixWithoutIntro?:boolean; mixName?:string;targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean;cleanupAudio?:boolean;normalizeIntro?:boolean;trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean;includeIntro?:boolean;introID?:string;introScope?:IntroScope;excludeFromMix?:number[];trackFormat?:ProjectTrackFormat;sourceExport?:string;edits?:AudioEdits;transcribe?:boolean;upload?:CloudProvider;trimStart?:number;trimEnd?:number;backupProjects?:BackupProject[]};
-export interface ExportJob extends Extras {id:string;sessionID:string;guildID:string;format:ExportFormat;mix:boolean;state:"queued"|"running"|"cancelling"|"cancelled"|"completed"|"failed";createdAt:string;queueOrder?:number;directory?:string;error?:string;publicError?:string;failureStage?:string;stage?:string;progress?:{processedSeconds:number;totalSeconds?:number;remainingSeconds?:number};overallEstimate?:OverallEstimate;stageTimings?:ExportStageProfile;retryOf?:string}
+type Extras={mixWithoutIntro?:boolean; mixName?:string;targetLUFS?:number;maxTruePeakDBTP?:number;normalizeAudio?:boolean;cleanupAudio?:boolean;normalizeIntro?:boolean;trimSilence?:boolean;trimEndSilence?:boolean;silenceSeconds?:number;includeRaw?:boolean;includeIntro?:boolean;introID?:string;introScope?:IntroScope;excludeFromMix?:number[];trackFormat?:ProjectTrackFormat;sourceExport?:string;edits?:AudioEdits;transcribe?:boolean;upload?:CloudProvider;automatic?:boolean;notifyChannelID?:string;trimStart?:number;trimEnd?:number;backupProjects?:BackupProject[]};
+export interface ExportJob extends Extras {id:string;sessionID:string;guildID:string;format:ExportFormat;mix:boolean;state:"queued"|"running"|"cancelling"|"cancelled"|"completed"|"failed";createdAt:string;queueOrder?:number;directory?:string;error?:string;publicError?:string;failureStage?:string;stage?:string;progress?:{processedSeconds:number;totalSeconds?:number;remainingSeconds?:number};overallEstimate?:OverallEstimate;stageTimings?:ExportStageProfile;retryOf?:string;uploadedAs?:string}
 /** Like Craig's QUEUE_SIZE: how many exports run at once across every server; later jobs wait in order. */
 export function exportConcurrency(value=process.env.EXPORT_CONCURRENCY?.trim()):number{if(!value)return 1;const limit=Number(value);if(!Number.isInteger(limit)||limit<1||limit>16)throw new Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");return limit;}
 const TRANSCRIPTS_OFF_MESSAGE="Transcripts are turned off right now. Export again without a transcript.";
@@ -38,7 +40,10 @@ export class ExportQueue {
  private serverAccess?:ServerAccessStore;
  setServerAccess(access:ServerAccessStore):void{this.serverAccess=access;}
  private jobs=new Map<string,ExportJob>();private dispatching?:Promise<void>;private redispatch=false;private running=new Map<string,Promise<void>>();private stopped=false;private submissions:Promise<unknown>=Promise.resolve();private active=new Map<string,AbortController>();private saves=new Map<string,Promise<void>>();private deleting=new Set<string>();
- private accounts:CloudAccounts;
+ private uploading=new Set<string>();private uploadTail:Promise<void>=Promise.resolve();
+ private uploadNotifier?:(job:ExportJob)=>Promise<void>;
+ /** Told when an upload job ends, so automatic uploads can report back in Discord. */
+ setUploadNotifier(notifier:(job:ExportJob)=>Promise<void>):void{this.uploadNotifier=notifier;}
  private started=false;private diskPaused=false;private diskAborted=new Set<string>();private reservations=new Map<string,number>();private diskPausing?:Promise<void>;private diskGuard?:NodeJS.Timeout;private maintenanceTimer?:NodeJS.Timeout;
  private cooldown?:NodeJS.Timeout;
  private sequentialWorkspace=new Map<string,number>();
@@ -54,8 +59,8 @@ export class ExportQueue {
  /** Reads each Discord server's Soundcraft backup-project admin setting when a job is submitted. */
  setSoundcraftBackupPolicy(policy:(guildID:string)=>SoundcraftBackupMode):void{this.backupPolicy=policy;}
  private pendingPersistence=new Set<ExportJob>();
- private assertUploadAllowed(guildID:string):void{const allowed=(process.env.CLOUD_UPLOAD_GUILD_IDS??"").split(",").map(id=>id.trim()).filter(Boolean);if(allowed.length&&!allowed.includes(guildID))throw new UserError("Cloud uploads are not enabled for this server.");}
- constructor(private root:string,private exporter=exportSession,private diskCritical:()=>Promise<boolean>|boolean=()=>false,private concurrency=exportConcurrency(),private inspectSpace?:()=>Promise<StorageSpace>,private startSoundReferences:()=>Set<string>=()=>new Set()){if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");this.accounts=new CloudAccounts(root);}
+ private assertUploadAllowed(guildID:string):void{if(!cloudUploadAllowed())throw new UserError("Cloud uploads are paused on this bot right now.");const allowed=(process.env.CLOUD_UPLOAD_GUILD_IDS??"").split(",").map(id=>id.trim()).filter(Boolean);if(allowed.length&&!allowed.includes(guildID))throw new UserError("Cloud uploads are not enabled for this server.");}
+ constructor(private root:string,private exporter=exportSession,private diskCritical:()=>Promise<boolean>|boolean=()=>false,private concurrency=exportConcurrency(),private inspectSpace?:()=>Promise<StorageSpace>,private startSoundReferences:()=>Set<string>=()=>new Set()){if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error("EXPORT_CONCURRENCY must be a whole number from 1 to 16.");}
  private save(job:ExportJob):Promise<void>{const body=JSON.stringify(job,null,2),file=path.join(this.root,"jobs",job.id+".json");const task=(this.saves.get(job.id)??Promise.resolve()).catch(()=>{}).then(async()=>{await writeFile(file+".tmp",body);await rename(file+".tmp",file);});this.saves.set(job.id,task);void task.finally(()=>{if(this.saves.get(job.id)===task)this.saves.delete(job.id);}).catch(()=>{});return task;}
  async load(start=true):Promise<void>{
   await mkdir(path.join(this.root,"jobs"),{recursive:true});
@@ -102,7 +107,7 @@ export class ExportQueue {
   if(format==="soundcraft"){const intro=extras.introID?await getServerIntro(this.root,guildID,extras.introID,introSession,session.channelID):undefined;assertSoundcraftLength(soundcraftExportSeconds(session,extras,intro?.seconds??0));}
   // After the length check, so an overlong recording reports that first.
   extras={...extras,backupProjects:resolvedBackups?validateSavedBackups(extras.backupProjects,format):resolveBackupProjects(this.backupPolicy(guildID),format,extras.backupProjects)};
-  if(extras.transcribe){const status=transcriptionStatus();if(status==="off")throw new UserError(TRANSCRIPTS_OFF_MESSAGE);if(status==="checking")throw new UserError("Transcription is still being checked on this host. Try again in a few seconds.");if(status!=="ready")throw new UserError("Configure a local transcription executable and model first.");}if(extras.upload&&!["dropbox","google","onedrive","box"].includes(extras.upload))throw new UserError("Invalid cloud provider.");if(extras.upload)this.assertUploadAllowed(guildID);if(extras.upload&&!await this.accounts.configured(extras.upload))throw new UserError("Configure the cloud account first.");
+  if(extras.transcribe){const status=transcriptionStatus();if(status==="off")throw new UserError(TRANSCRIPTS_OFF_MESSAGE);if(status==="checking")throw new UserError("Transcription is still being checked on this host. Try again in a few seconds.");if(status!=="ready")throw new UserError("Configure a local transcription executable and model first.");}if(extras.upload&&!["dropbox","google","onedrive","box"].includes(extras.upload))throw new UserError("Invalid cloud provider.");if(extras.upload)this.assertUploadAllowed(guildID);if(extras.upload&&!await new CloudAccounts(this.root,{},{guildID}).configured(extras.upload))throw new UserError("Connect a cloud account for this server first with /cloud action:connect.");
   if(this.deleting.has(sessionID))throw new UserError("This recording is being deleted.");
   if(this.stopped)throw new UserError("Export service is stopping.");await assertDeploymentIdle(this.root);
   const matches=(job:ExportJob)=>job.sessionID===sessionID&&job.format===format&&job.mix===mix&&!!job.mixWithoutIntro===!!extras.mixWithoutIntro&&job.mixName===extras.mixName&&(job.targetLUFS??TARGET_LUFS)===extras.targetLUFS&&(job.maxTruePeakDBTP??TRUE_PEAK_DBTP)===extras.maxTruePeakDBTP&&!!job.normalizeAudio===!!extras.normalizeAudio&&!!job.cleanupAudio===!!extras.cleanupAudio&&!!job.normalizeIntro===!!extras.normalizeIntro&&!!job.trimSilence===!!extras.trimSilence&&!!job.trimEndSilence===!!extras.trimEndSilence&&(job.silenceSeconds??botDefaults().silenceSeconds)===(extras.silenceSeconds??botDefaults().silenceSeconds)&&!!job.includeRaw===!!extras.includeRaw&&job.introID===extras.introID&&(job.introScope??"server")===(extras.introScope??"server")&&JSON.stringify(job.excludeFromMix??[])===JSON.stringify(extras.excludeFromMix??[])&&job.trackFormat===extras.trackFormat&&job.transcribe===extras.transcribe&&job.upload===extras.upload&&job.trimStart===extras.trimStart&&job.trimEnd===extras.trimEnd&&job.sourceExport===extras.sourceExport&&JSON.stringify(job.edits)===JSON.stringify(extras.edits)&&JSON.stringify(job.backupProjects)===JSON.stringify(extras.backupProjects);
@@ -131,7 +136,7 @@ export class ExportQueue {
  }
  private owned(id:string,guildID:string):ExportJob{const job=this.jobs.get(id);if(!job||job.guildID!==guildID)throw new UserError("Export job not found in this server.");return job;}
  async cancel(id:string,guildID:string):Promise<ExportJob>{const job=this.owned(id,guildID);if(job.state==="queued"){job.state="cancelled";job.stage="Cancelled";}else if(job.state==="running"){job.state="cancelling";this.active.get(id)?.abort(new Error("Export cancelled."));}else if(!["cancelling","cancelled"].includes(job.state))throw new UserError("Only queued or running jobs can be cancelled.");await this.save(job);return job;}
- async retry(id:string,guildID:string):Promise<ExportJob>{const previous=this.owned(id,guildID);if(!["failed","cancelled"].includes(previous.state))throw new UserError("Only failed or cancelled jobs can be retried.");const {mixName,targetLUFS,maxTruePeakDBTP,transcribe,upload,trimStart,trimEnd,edits,sourceExport,trackFormat,excludeFromMix,includeIntro,introID,introScope,trimSilence,trimEndSilence,silenceSeconds,includeRaw,normalizeAudio,cleanupAudio,normalizeIntro,backupProjects}=previous;const job=await this.schedule(previous.sessionID,guildID,previous.format,previous.mix,{mixName,targetLUFS,maxTruePeakDBTP,transcribe,upload,trimStart,trimEnd,edits,sourceExport,trackFormat,excludeFromMix,includeIntro,introID,introScope,trimSilence,trimEndSilence,silenceSeconds,includeRaw,normalizeAudio,cleanupAudio,normalizeIntro,backupProjects},true);job.retryOf=id;await this.save(job);return job;}
+ async retry(id:string,guildID:string):Promise<ExportJob>{const previous=this.owned(id,guildID);if(!["failed","cancelled"].includes(previous.state))throw new UserError("Only failed or cancelled jobs can be retried.");const {automatic,notifyChannelID,mixName,targetLUFS,maxTruePeakDBTP,transcribe,upload,trimStart,trimEnd,edits,sourceExport,trackFormat,excludeFromMix,includeIntro,introID,introScope,trimSilence,trimEndSilence,silenceSeconds,includeRaw,normalizeAudio,cleanupAudio,normalizeIntro,backupProjects}=previous;const job=await this.schedule(previous.sessionID,guildID,previous.format,previous.mix,{automatic,notifyChannelID,mixName,targetLUFS,maxTruePeakDBTP,transcribe,upload,trimStart,trimEnd,edits,sourceExport,trackFormat,excludeFromMix,includeIntro,introID,introScope,trimSilence,trimEndSilence,silenceSeconds,includeRaw,normalizeAudio,cleanupAudio,normalizeIntro,backupProjects},true);job.retryOf=id;await this.save(job);return job;}
  async whileIdle<T>(sessionID:string,action:()=>Promise<T>):Promise<T>{await this.submissions.catch(()=>{});if(this.deleting.has(sessionID)||this.busy(sessionID))throw new UserError("Wait for this recording's exports to finish before deleting it.");this.deleting.add(sessionID);try{return await action();}finally{this.deleting.delete(sessionID);}}
  busy(sessionID:string):boolean{return [...this.jobs.values()].some(job=>job.sessionID===sessionID&&["queued","running","cancelling"].includes(job.state));}
  /** Intro IDs any known job uses; cleanup and custom-intro pruning keep these. */
@@ -140,7 +145,7 @@ export class ExportQueue {
  diagnosticStages(){return [...this.jobs.values()].filter(job=>["running","cancelling"].includes(job.state)).slice(0,16).map(job=>({id:job.id,format:job.format,stage:(typeof job.stage==="string"?job.stage:job.state).slice(0,200)}));}
  get(id:string):ExportJob|undefined{return this.jobs.get(id);}
  /** Oldest first, as Craig orders its queue, so a restart or retry cannot reshuffle waiting servers. */
- private queued():ExportJob[]{return [...this.jobs.values()].filter(job=>job.state==="queued").sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt)||(a.queueOrder??0)-(b.queueOrder??0)||a.id.localeCompare(b.id));}
+ private queued():ExportJob[]{return [...this.jobs.values()].filter(job=>job.state==="queued").sort((a,b)=>Number(!!a.automatic)-Number(!!b.automatic)||Date.parse(a.createdAt)-Date.parse(b.createdAt)||(a.queueOrder??0)-(b.queueOrder??0)||a.id.localeCompare(b.id));}
  /** 1-based place among waiting jobs; undefined once the job is running or finished. */
  get stopping():boolean{return this.stopped;}
  position(id:string):number|undefined{const index=this.queued().findIndex(job=>job.id===id);return index<0?undefined:index+1;}
@@ -152,7 +157,7 @@ export class ExportQueue {
  /** Start waiting jobs until the concurrency limit is reached; each finished job dispatches the next. */
  private async dispatch():Promise<void>{
   await this.submissions.catch(()=>{});for(const job of this.pendingPersistence){await this.save(job);this.pendingPersistence.delete(job);}
-  while(!this.stopped&&!this.diskPaused&&!this.cooldown&&this.running.size<this.concurrency){
+  while(!this.stopped&&!this.diskPaused&&!this.cooldown&&this.running.size-this.uploading.size<this.concurrency){
    if(await this.diskCritical()){this.pause();return;}
    if(this.stopped||this.diskPaused||this.cooldown)return;
    if(this.sequentialWorkspace.size)return;
@@ -178,6 +183,12 @@ export class ExportQueue {
    }).finally(()=>{this.running.delete(job.id);this.reservations.delete(job.id);this.sequentialWorkspace.delete(job.id);this.kick();});
   }
  }
+ /** One upload at a time. A waiting or running upload frees its export slot, so slow networks never hold up other servers' exports. */
+ private async inUploadLane<T>(id:string,signal:AbortSignal,work:()=>Promise<T>):Promise<T>{
+  this.uploading.add(id);this.kick();const previous=this.uploadTail;let release=()=>{};this.uploadTail=new Promise<void>(resolve=>{release=resolve;});
+  try{await Promise.race([previous,new Promise<never>((_,reject)=>{if(signal.aborted)reject(signal.reason);else signal.addEventListener("abort",()=>reject(signal.reason),{once:true});})]);return await work();}
+  finally{this.uploading.delete(id);void previous.then(release);}
+ }
  private async process(job:ExportJob):Promise<void>{const profiler=new ExportStageProfiler();job.stageTimings=profiler.timings;const controller=new AbortController(),signal=controller.signal;this.active.set(job.id,controller);job.state="running";job.stage="Preparing audio";job.progress=undefined;job.overallEstimate=undefined;
   try{await this.save(job);}catch(error){this.active.delete(job.id);job.state=(job as ExportJob).state==="cancelling"?"cancelled":"queued";job.stage=job.state==="cancelled"?"Cancelled":"Waiting to retry";this.pendingPersistence.add(job);this.diskAborted.delete(job.id);throw error;}
   try{
@@ -201,10 +212,12 @@ export class ExportQueue {
    },render);job.directory=path.basename(directory);signal.throwIfAborted();
    if(job.transcribe){profiler.begin("transcription");job.stage="Transcribing";await this.save(job);await transcribeExport(directory,{...await checkedTranscriptionConfig(),ffmpeg:defaultAudioTool(),signal});}
    if(job.transcribe&&(["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw||job.mixWithoutIntro)){profiler.begin("package");await rm(path.join(directory,"project.zip"));await writeProjectZip(directory,signal);}
-   if(job.upload){profiler.begin("upload");this.assertUploadAllowed(job.guildID);job.stage="Uploading";await this.save(job);for(const filename of await readdir(directory)){signal.throwIfAborted();if((["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw||job.mixWithoutIntro)&&filename!=="project.zip")continue;if(!/^(track-\d+|mix|manifest|notes|transcript|session|project)\.(ogg|wav|flac|mp3|m4a|json|txt|srt|vtt|sesx|aup3?|scraft|zip)$/.test(filename))continue;const prefix=job.upload.toUpperCase();await uploadFile(job.upload,path.join(directory,filename),{token:await this.accounts.token(job.upload,signal),folder:process.env[`${prefix}_FOLDER`],name:`witness-${job.id}-${filename}`,signal});}}
+   if(job.upload){profiler.begin("upload");this.assertUploadAllowed(job.guildID);const provider=job.upload;job.stage="Waiting to upload";await this.save(job);job.uploadedAs=await this.inUploadLane(job.id,signal,async()=>{job.stage="Uploading";await this.save(job);return deliverToCloud(this.root,directory,job.guildID,provider,signal);});
+    // Nobody downloads an automatic export, so it should not hold disk space for 48 hours.
+    if(job.automatic){await rm(directory,{recursive:true,force:true});job.directory=undefined;}}
    signal.throwIfAborted();job.state="completed";job.stage="Ready";
   }catch(error){job.failureStage=job.stage;job.publicError=exportFailureMessage(error,job.failureStage);job.state=signal.aborted?((this.stopped||this.diskAborted.has(job.id))&&(job as ExportJob).state!=="cancelling"?"queued":"cancelled"):"failed";job.error=signal.aborted?undefined:error instanceof Error?error.message:String(error);job.stage=job.state==="queued"?(this.diskAborted.has(job.id)?"Waiting for disk space":"Waiting for restart"):job.state==="cancelled"?"Cancelled":"Failed";if(this.diskAborted.has(job.id)&&job.directory&&/^export-[a-f0-9-]{36}$/i.test(job.directory)){await rm(path.join(this.root,job.sessionID,job.directory),{recursive:true,force:true});job.directory=undefined;}if(job.state==="failed")console.error(`[Export] Job ${job.id} failed:`,error);}
-  finally{profiler.finish();console.info("[Export stages]",JSON.stringify({id:job.id,state:job.state,timings:job.stageTimings}));this.active.delete(job.id);this.diskAborted.delete(job.id);try{await this.save(job);}catch(error){this.pendingPersistence.add(job);throw error;}}
+  finally{profiler.finish();console.info("[Export stages]",JSON.stringify({id:job.id,state:job.state,timings:job.stageTimings}));this.active.delete(job.id);this.diskAborted.delete(job.id);try{await this.save(job);}catch(error){this.pendingPersistence.add(job);throw error;}if(job.upload&&["completed","failed","cancelled"].includes(job.state))void this.uploadNotifier?.(job).catch(error=>console.warn("[Cloud] Could not report upload result:",error));}
  }
  async pauseForDisk():Promise<void>{
   if(this.stopped)return;if(this.diskPausing)return this.diskPausing;this.diskPaused=true;

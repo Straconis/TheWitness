@@ -1,7 +1,7 @@
 import type { RecordingSession } from "../recording/session";
 import type { StorageMonitor } from "../storage/space";
 interface Transport {createMessage(channel:string,body:any):Promise<{id:string}>;editMessage(channel:string,id:string,body:any):Promise<unknown>}
-export interface PanelContext {serverName?:string;serverIcon?:string;deletesAt?:number}
+export interface PanelContext {serverName?:string;serverIcon?:string;deletesAt?:number;cloudNotice?:string}
 
 export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now(),context:PanelContext={}):any{
  const duration=Math.max(0,Math.floor(((session.endedAt?Date.parse(session.endedAt):now)-Date.parse(session.startedAt))/1000)),minutes=Math.floor(duration/60),seconds=duration%60;
@@ -18,6 +18,7 @@ export function panelBody(session:RecordingSession,lowSpace=false,now=Date.now()
   {name:"Packet drops",value:String(session.packetStats.duplicatesDropped+session.packetStats.latePacketsDropped),inline:true},
   {name:"Session",value:`\`${session.id}\``}
  ];
+ if(context.cloudNotice)fields.push({name:"Automatic upload is on",value:context.cloudNotice});
  if(session.stopReason==="duration-limit")fields.push({name:`${session.durationHours}-hour session limit reached`,value:"Recording stopped automatically. Start a new recording to continue."});
  if(session.stopReason==="disconnected")fields.push({name:"Disconnected from voice",value:"Recording stopped and saved. Use /record to start a new session."});
  if(session.stopReason==="low-disk")fields.push({name:"Disk space critically low",value:"Recording stopped automatically to protect saved audio. Free up space, then start a new recording."});

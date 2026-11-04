@@ -139,7 +139,7 @@ test('export queue refuses new exports when disk is critical and enforces the cl
     const queue = new ExportQueue(root, async () => root); await queue.load();
     await assert.rejects(queue.enqueue(session.id, '222', 'wav', false, { upload: 'dropbox' }), /not enabled for this server/);
     process.env.CLOUD_UPLOAD_GUILD_IDS = '222';
-    await assert.rejects(queue.enqueue(session.id, '222', 'wav', false, { upload: 'dropbox' }), /Configure the cloud account/, 'allowed servers get past the allowlist');
+    await assert.rejects(queue.enqueue(session.id, '222', 'wav', false, { upload: 'dropbox' }), /Connect a cloud account/, 'allowed servers get past the allowlist');
     await queue.close();
   } finally {
     if (previous === undefined) delete process.env.CLOUD_UPLOAD_GUILD_IDS; else process.env.CLOUD_UPLOAD_GUILD_IDS = previous;

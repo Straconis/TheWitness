@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {IdleVoice} from "./idle-voice";
 import { deletionTime } from "../storage/retention-policy";
 import { noticeSkippedRecording } from "./skipped-recording";
@@ -24,6 +25,8 @@ import { deleteSession } from "../storage/delete";
 import { ExportQueue, ExportJob } from "../exports/jobs";
 import { setTimeout as delay } from "node:timers/promises";
 import { recoverSession } from "../recording/salvage";
+import { AutoUploader,CLOUD_LABELS,HOSTED_CLOUD_PROVIDERS,uploadServerAllowed } from "../integrations/auto-upload";
+import { cloudUploadAllowed } from "../storage/cloud-upload-setting";
 import type { DownloadService } from "../downloads/service";
 import path from "node:path";
 import { SettingsStore } from "../storage/settings";
@@ -79,6 +82,7 @@ async function awaitExport(queue:ExportQueue,id:string,onPosition:(position:numb
 async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild> = client.guilds.values()): Promise<void> {
   for (const guild of guilds) {
     const registered = await client.bulkEditGuildCommands(guild.id, [
+      {type:1,name:"cloud",description:"Connect this server's cloud storage (changes need Manage Server).",options:[{type:3,name:"action",description:"What to do",required:true,choices:[{name:"Status",value:"status"},{name:"Connect an account",value:"connect"},{name:"Turn automatic upload on",value:"auto-on"},{name:"Turn automatic upload off",value:"auto-off"},{name:"Disconnect",value:"disconnect"}]},{type:3,name:"provider",description:"Cloud service to connect",choices:HOSTED_CLOUD_PROVIDERS.map(value=>({name:CLOUD_LABELS[value],value}))}]},
       {type:1,name:"startsound",description:"Show the recording start notice status (controls are on the owner admin page).",options:[{type:3,name:"mode",description:"Start sound mode",required:true,choices:["status"].map(value=>({name:value,value}))}]},
       {type:1,name:"recordinglimit",description:"Set the recording maximum (Manage Server required).",options:[{type:4,name:"hours",description:"Maximum hours; omit to show current setting",choices:RECORDING_DURATION_HOURS.map(value=>({name:`${value} hours`,value}))}]},
       {type:1,name:"schedule",description:"Opt into recurring recording (Manage Server required).",options:[{type:3,name:"action",description:"Schedule action",required:true,choices:[{name:"Add",value:"add"},{name:"Remove",value:"remove"},{name:"List",value:"list"}]},{type:7,name:"channel",description:"Voice channel",channel_types:[2]},{type:3,name:"time",description:"Start HH:MM in the selected time zone"},{type:3,name:"days",description:"Weekdays as numbers: 0=Sun, 1=Mon, … 6=Sat (comma-separated)"},{type:3,name:"timezone",description:"IANA time zone, e.g. America/New_York (default UTC)"},{type:4,name:"minutes",description:"Recording duration in minutes",min_value:1,max_value:1440},{type:3,name:"title",description:"Recording title",max_length:120},{type:3,name:"id",description:"Schedule ID to remove"}]},
@@ -103,7 +107,7 @@ async function registerCommands(client: Eris.Client, guilds: Iterable<Eris.Guild
         { type: 3, name: "backup", description: "Soundcraft only: backup projects for Soundcraft testing", choices: [["audition","Adobe Audition"],["audacity","Audacity"],["both","Audition and Audacity"],["none","Neither"]].map(([value,name])=>({name,value})) },
         { type: 5, name: "mix", description: "Also include mixed session audio" },
         { type: 5, name: "transcribe", description: "Create transcripts using your configured local model" },
-        { type: 3, name: "upload", description: "Upload to your configured cloud account", choices:["dropbox","google","onedrive","box"].map(value=>({name:value,value})) }
+        { type: 3, name: "upload", description: "Upload to the cloud account connected to this server", choices:HOSTED_CLOUD_PROVIDERS.map(value=>({name:CLOUD_LABELS[value],value})) }
       ] },
       {
         type: 1,
@@ -230,6 +234,7 @@ async function startRecording(client: Eris.Client, guild: Eris.Guild, channelID:
 }
 
 export function createDiscordClient(downloads?: DownloadService, exportQueue?: ExportQueue, botStatus?:BotStatusStore, serverAccess?:ServerAccessStore): Eris.Client {
+  let autoUploads:AutoUploader|undefined;
   const client = new Eris.Client(config.discordToken, {
     allowedMentions:{everyone:false,roles:false,users:false},
     gateway: { intents: ["guilds", "guildVoiceStates", "guildScheduledEvents"] }
@@ -242,7 +247,12 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   downloads?.setLiveNames?.((guildID,channelID)=>{const guild=client.guilds.get(guildID);return {guildName:guild?.name,channelName:channelID?guild?.channels.get(channelID)?.name:undefined};});
   downloads?.setIntroChannels?.(guildID=>[...(client.guilds.get(guildID)?.channels.values()??[])].filter(channel=>channel.type===2).map(channel=>({id:channel.id,name:channel.name})));
 
-  const panelContext=(session:{guildID:string;state:string;startedAt:string;endedAt?:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined,deletesAt:deletionTime(session,settingsStore.get(session.guildID).retentionDays,settingsStore.retentionPolicy.get())};};
+  const panelContext=(session:{guildID:string;state:string;startedAt:string;endedAt?:string})=>{const guild=client.guilds.get(session.guildID);return {serverName:guild?.name,serverIcon:guild?.iconURL??undefined,deletesAt:deletionTime(session,settingsStore.get(session.guildID).retentionDays,settingsStore.retentionPolicy.get()),cloudNotice:session.state==="recording"?autoUploads?.panelNotice(session.guildID):undefined};};
+  if(downloads&&exportQueue){
+    const uploads=new AutoUploader(config.recordingPath,settingsStore,exportQueue,(channel,message)=>client.createMessage(channel,{content:message,allowedMentions:{everyone:false,roles:false,users:false}}));autoUploads=uploads;
+    recordings.onFinished=(session,error)=>uploads.recordingFinished(session,error);
+    downloads.setCloudConnected?.(details=>uploads.connected(details));
+  }
   const panels=new RecordingPanels(client,storageMonitor,panelContext);recordingPanels=panels;
 
   recordings.onDisconnected=async session=>{const guild=client.guilds.get(session.guildID);if(guild)leaveVoiceChannel(guild);await panels.update();};
@@ -295,6 +305,8 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
   });
   // Servers that add the bot while it is running need commands without waiting for a restart.
   client.on("guildCreate", guild => { void registerCommands(client, [guild]); });
+  // A server that removes the bot should not leave a live connection to someone's cloud account behind.
+  client.on("guildDelete", guild => { if(autoUploads?.status(guild.id).provider)void autoUploads.disconnect(guild.id).catch(error=>console.warn("[Cloud] Could not remove a server connection:",error)); });
 
   const autoJoin=async (member:Eris.Member, channel:Eris.VoiceChannel|Eris.StageChannel) => {
     if (channel.type!==2 || member.bot || member.id === client.user.id) {
@@ -423,6 +435,36 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       if(mode!=="status")throw new UserError("Recording notices are controlled by the bot owner on /admin.");
       await interaction.createMessage({content:`Start sound: ${mode==="status"?choice.mode:mode}.${process.env.START_SOUND?.trim()==="off"?" The host has disabled all start sounds.":""}${mode==="off"?" Participants will rely on the recording panel message to know recording started.":""}`,flags:64});return;
     }
+    if(commandName==="cloud"){
+      const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value,action=value("action"),provider=value("provider");
+      await interaction.defer(64);
+      if(!autoUploads||!downloads)throw new UserError("Cloud uploads need the web export service, which is off on this bot.");
+      const status=autoUploads.status(guildID),announce=(message:string)=>interaction.channel?.id?client.createMessage(interaction.channel.id,{content:message,allowedMentions:{everyone:false,roles:false,users:false}}).catch(error=>console.warn("[Cloud] Could not post a notice:",error)):undefined;
+      if(action==="status"){
+        const notes=[status.provider?`Connected to ${CLOUD_LABELS[status.provider]}. Automatic upload is ${status.auto?"on":"off"}.`:"No cloud account is connected to this server."];
+        if(!cloudUploadAllowed())notes.push("Cloud uploads are paused on this bot right now.");else if(!uploadServerAllowed(guildID))notes.push("Cloud uploads aren't enabled for this server yet.");
+        await interaction.editOriginalMessage({content:notes.join(" ")});return;
+      }
+      if(!interaction.member?.permissions?.has("manageGuild"))throw new UserError("Manage Server permission is required to change cloud uploads.");
+      if(action==="connect"){
+        if(!cloudUploadAllowed())throw new UserError("Cloud uploads are paused on this bot right now.");
+        if(!uploadServerAllowed(guildID))throw new UserError("Cloud uploads aren't enabled for this server yet.");
+        if(!HOSTED_CLOUD_PROVIDERS.includes(provider))throw new UserError("Choose Google Drive or Dropbox in the provider option.");
+        let link:string;try{link=await autoUploads.connectLink(guildID,provider,downloads.origin,interaction.channel?.id,interaction.member?.id);}catch(error){console.warn("[Cloud] Could not start a connection:",error);throw new UserError(`${CLOUD_LABELS[provider as keyof typeof CLOUD_LABELS]} isn't set up on this bot yet.`);}
+        await interaction.editOriginalMessage({content:`[Connect ${CLOUD_LABELS[provider as keyof typeof CLOUD_LABELS]}](${link}) within ten minutes, signed in to the account that should receive this server's recordings. Keep this link private.`});return;
+      }
+      if(action==="auto-on"||action==="auto-off"){
+        if(action==="auto-on"&&!status.provider)throw new UserError("Connect an account first with /cloud action:connect.");
+        await autoUploads.setAuto(guildID,action==="auto-on");await announce(action==="auto-on"?`Automatic upload is on. When a recording in this server ends, a copy goes to the connected ${CLOUD_LABELS[status.provider!]} account. Let people in your calls know.`:"Automatic upload is off. Recordings in this server stay on the bot unless someone exports them.");
+        await interaction.editOriginalMessage({content:`Automatic upload is ${action==="auto-on"?"on":"off"}.`});return;
+      }
+      if(action==="disconnect"){
+        if(!status.provider){await interaction.editOriginalMessage({content:"No cloud account is connected to this server."});return;}
+        await autoUploads.disconnect(guildID);await announce(`${CLOUD_LABELS[status.provider]} was disconnected from this server. Files already uploaded stay in that account.`);
+        await interaction.editOriginalMessage({content:"Disconnected."});return;
+      }
+      throw new UserError("Invalid cloud action.");
+    }
     if(["recordinglimit","schedule","retention","channelrules"].includes(commandName)){
       if(!interaction.member?.permissions?.has("manageGuild")){await interaction.createMessage({content:"Manage Server permission is required for automation settings.",flags:64});return;}
       const options=interaction.data?.options??[],value=(name:string)=>options.find((option:any)=>option.name===name)?.value;await interaction.defer(64);
@@ -496,6 +538,7 @@ export function createDiscordClient(downloads?: DownloadService, exportQueue?: E
       const sourceID = interaction.data?.options?.find((option: any) => option.name === "session")?.value;
       const id = await recordings.exclusive(guildID, () => recoverSession(config.recordingPath,sourceID,guildID));
       await interaction.editOriginalMessage({ content: `Recovered saved audio into session \`${id}\`. The original files were preserved. You can export the recovered session.` });
+      if(autoUploads&&interaction.channel?.id)void readFile(path.join(config.recordingPath,id,"session.json"),"utf8").then(text=>autoUploads.recordingFinished({id,guildID,channelID:interaction.channel.id,startedAt:JSON.parse(text).startedAt,packets:1})).catch(error=>console.warn("[Cloud] Automatic upload did not start:",error));
       return;
     }
     if (commandName === "note") {

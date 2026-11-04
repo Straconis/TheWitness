@@ -26,7 +26,10 @@ import type { TranscriptionSetting } from "../storage/transcription-setting";
 import { editorPage } from "./editor-page";
 import { waveform } from "./waveforms";
 import { validateEdits } from "../exports/edits";
-import { CloudAccounts } from "../integrations/accounts";
+import { CloudAccounts,completeCloudConnection } from "../integrations/accounts";
+import { CLOUD_LABELS } from "../integrations/auto-upload";
+import { cloudUploadAllowed,type CloudUploadSetting } from "../storage/cloud-upload-setting";
+import type { CloudProvider } from "../integrations/cloud";
 import { contentDisposition, downloadName, DownloadNaming } from "./names";
 import {mixNameField,mixNameScript} from './mix-name';
 import {ensureSpeakerProjectZip} from "../exports/project-zip";
@@ -74,6 +77,12 @@ export class DownloadService {
   private applyOwnerStatus?:()=>void;
   private transcriptionSetting?:TranscriptionSetting;
   setTranscriptionSetting(setting:TranscriptionSetting):void{this.transcriptionSetting=setting;}
+  private cloudSetting?:CloudUploadSetting;
+  setCloudUploadSetting(setting:CloudUploadSetting):void{this.cloudSetting=setting;}
+  private cloudConnected?:(details:{provider:CloudProvider;guildID:string;channelID?:string;userID?:string})=>Promise<void>;
+  setCloudConnected(handler:(details:{provider:CloudProvider;guildID:string;channelID?:string;userID?:string})=>Promise<void>):void{this.cloudConnected=handler;}
+  /** The address cloud providers send people back to after they sign in. */
+  get origin():string{return this.publicURL;}
   setOwnerAdmin(store:BotStatusStore,apply:()=>void):void{this.ownerStatus=store;this.applyOwnerStatus=apply;this.startDiagnostics();}
   adminLink():string{return this.issue("/admin/control",3600);}
   private server?: Server;
@@ -126,7 +135,7 @@ export class DownloadService {
     if(!this.queue||!this.settings||!this.manager)return this.error(response,503,"Dashboard unavailable.");
     if(request.method==="GET"){
       if(url.searchParams.has("preview-start-sound"))return this.error(response,403,"Recording notices are controlled by the bot owner on /admin.");
-      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,soundcraftBackup:backupMode(this.settings.get(guildID)),intro:canManage?await getServerIntro(this.root,guildID):undefined,introChannels:canManage?await this.channelIntros(guildID):undefined,integrations:{transcription:transcriptionReady(),transcriptionOff:!transcriptionAllowed(),cloud:await new CloudAccounts(this.root).status()},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
+      if(request.headers.accept?.includes("application/json"))return this.json(response,200,{canManage,soundcraftBackup:backupMode(this.settings.get(guildID)),intro:canManage?await getServerIntro(this.root,guildID):undefined,introChannels:canManage?await this.channelIntros(guildID):undefined,integrations:{transcription:transcriptionReady(),transcriptionOff:!transcriptionAllowed(),cloud:await new CloudAccounts(this.root,{},{guildID}).status().catch(()=>[])},settings:this.settings.get(guildID),storage:await this.space?.check().catch(()=>undefined),syncFeedURL:this.issue(`/sync-feed/${guildID}`,31536000),sessions:await listSessions(this.root,guildID)});
       return this.html(response,dashboardPage(canManage));
     }
     if(request.method!=="POST")return this.error(response,405,"Method not allowed.");
@@ -245,7 +254,7 @@ export class DownloadService {
       }
       if(request.method==="GET"&&url.searchParams.get("diagnostics")==="download"){response.setHeader("Content-Disposition",'attachment; filename="witness-host-metrics.json"');return this.json(response,200,this.diagnostics?.history()??{intervalSeconds:15,maximumSamples:240,samples:[]});}
       if(request.method==="GET"&&request.headers.accept?.includes("application/json"))return this.json(response,200,{status:this.ownerStatus.get(),recoveryURL:this.recoveryLink(),backupSignIn:await ownerLogin.configured(),servers:this.adminServers(),serverCount:this.adminServers().length,load:{...await(this.serverLoad??=new ServerLoad(this.root)).sample(),recordings:this.manager?.sessions.size??0,exports:this.queue?.workload?.()??{running:0,queued:0},jobs:this.queue?.diagnosticStages?.()??[]}});
-      if(request.method==="GET"||request.method==="HEAD")return this.html(response,request.method==="HEAD"?"":adminPage(this.ownerStatus.get(),transcriptionAllowed(),this.settings?.retentionPolicy?.get(),this.settings?.retentionPolicy?.configured()));
+      if(request.method==="GET"||request.method==="HEAD")return this.html(response,request.method==="HEAD"?"":adminPage(this.ownerStatus.get(),transcriptionAllowed(),this.settings?.retentionPolicy?.get(),this.settings?.retentionPolicy?.configured(),cloudUploadAllowed()));
       if(request.method!=="POST")return this.json(response,405,{error:"Method not allowed."});
       if(request.headers.origin&&request.headers.origin!==this.publicURL)return this.json(response,403,{error:"Invalid request origin."});
       if(!request.headers["content-type"]?.startsWith("application/json"))return this.json(response,415,{error:"JSON required."});
@@ -259,6 +268,7 @@ export class DownloadService {
       }
       if(data.action==="retention-policy"){if(!this.settings)return this.json(response,503,{error:"Recording limits unavailable."});return this.json(response,200,await this.settings.retentionPolicy.save({days:data.days,storageCapGiB:data.storageCapGiB}));}
       if(data.action==="bot-defaults"){if(!this.settings)return this.json(response,503,{error:"Defaults unavailable."});return this.json(response,200,await this.settings.botDefaults.save({silenceSeconds:data.silenceSeconds,recordingDefaultHours:data.recordingDefaultHours,recordingMaxHours:data.recordingMaxHours}));}
+      if(data.action==="cloud"){if(!this.cloudSetting)return this.json(response,503,{error:"The cloud upload setting is unavailable."});await this.cloudSetting.update(data.enabled);return this.json(response,200,{enabled:cloudUploadAllowed()});}
       if(data.action==="transcription"){if(!this.transcriptionSetting)return this.json(response,503,{error:"The transcription setting is unavailable."});await this.transcriptionSetting.update(data.enabled);return this.json(response,200,{enabled:transcriptionAllowed()});}
       if(data.action==="create-owner-key"){const key=await ownerLogin.createKey();response.setHeader("Set-Cookie",await ownerLogin.cookie());return this.json(response,200,{key});}if(data.action==="logout"){response.setHeader("Set-Cookie",ownerLogin.clearCookie());return this.json(response,200,{signedOut:true});}if(data.action==="server-access"){if(!this.serverAccess||!this.ownerServers)return this.json(response,503,{error:"Server access controls unavailable."});if(!this.ownerServers().some(server=>server.id===data.guildID))return this.json(response,404,{error:"Server is not in the bot’s current server list."});await this.serverAccess.setAllowed(data.guildID,data.allowed);return this.json(response,200,{saved:true});}if(data.action!==undefined)throw Error("Unknown owner action.");await this.ownerStatus.update(data);this.applyOwnerStatus();return this.json(response,200,{saved:true});}catch(error){return this.json(response,400,{error:error instanceof Error?error.message:"Could not save status."});}
     }
@@ -315,7 +325,7 @@ export class DownloadService {
     }
     if(url.pathname==="/oauth/callback"){
       if(request.method!=="GET")return this.error(response,405,"Method not allowed.");
-      try{if(url.searchParams.has("error"))throw Error("Account connection was declined. Start again from the owner command line.");const provider=await new CloudAccounts(this.root).callback(url.searchParams.get("state")??"",url.searchParams.get("code")??"",this.publicURL);return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><h1>${provider} connected</h1><p>You can close this window. Uploads remain opt-in.</p></html>`);}
+      try{if(url.searchParams.has("error"))throw Error("Account connection was declined. Start again with /cloud in Discord.");const connected=await completeCloudConnection(this.root,url.searchParams.get("state")??"",url.searchParams.get("code")??"",this.publicURL);if(connected.guildID)await this.cloudConnected?.({...connected,guildID:connected.guildID});return this.html(response,`<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><h1>${CLOUD_LABELS[connected.provider]} connected</h1><p>You can close this window and return to Discord. Turn on automatic upload with /cloud if you want it.</p></html>`);}
       catch(error){return this.error(response,400,error instanceof Error?error.message:"Account connection failed.");}
     }
     if(url.pathname.startsWith("/recording/")){

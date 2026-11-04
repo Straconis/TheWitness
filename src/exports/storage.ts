@@ -22,7 +22,7 @@ export async function estimateExportBytes(root:string,job:ExportJob):Promise<num
  const maximum=Math.max(1,...spans);
  let output=spans.reduce((sum:number,seconds:number)=>sum+seconds*rate,0)+(job.mix?maximum*rate:0)+(job.mix&&intro&&job.mixWithoutIntro?maximum*rate:0);
  if(job.includeRaw)output+=metadata.tracks.length*duration*140000;
- const project=["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw||job.mix&&!!intro&&job.mixWithoutIntro;
+ const project=["audition","audacity","soundcraft"].includes(job.format)||job.includeRaw||!!job.upload||job.mix&&!!intro&&job.mixWithoutIntro;
  // Native projects store uncompressed samples (float32 for 24-bit input). ZIP compression is estimated conservatively; the live reserve guard enforces the actual limit.
  const native=job.format==="audacity"||job.format==="soundcraft"&&job.backupProjects?.includes("audacity");
  const nativeBytes=native?spans.reduce((n:number,s:number)=>n+s*(format==="wav"?192000:384000)*1.04,0):0;

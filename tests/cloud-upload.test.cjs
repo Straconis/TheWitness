@@ -1,0 +1,39 @@
+const test=require('node:test'),assert=require('node:assert/strict');const {mkdtemp,writeFile,rm}=require('node:fs/promises');const path=require('node:path'),os=require('node:os');const {createServer}=require('node:http');const {uploadFile,googleFolderID}=require('../dist/integrations/cloud');
+const source=Buffer.from(Array.from({length:1000},(_,index)=>index%251));const fast={token:'t',name:'a.flac',chunkBytes:300,retryDelayMs:1};
+async function fixture(handler,run){const root=await mkdtemp(path.join(os.tmpdir(),'witness-upload-'));const requests=[];const server=createServer(async(req,res)=>{const chunks=[];for await(const chunk of req)chunks.push(chunk);const request={url:req.url,method:req.method,body:Buffer.concat(chunks),headers:req.headers};requests.push(request);res.setHeader('Content-Type','application/json');await handler(request,res,`http://127.0.0.1:${server.address().port}`);});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));try{const filename=path.join(root,'a.flac');await writeFile(filename,source);await run(filename,`http://127.0.0.1:${server.address().port}`,requests);}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});}}
+const range=value=>{const match=/bytes (\d+)-(\d+)\/(\d+)/.exec(value??'');return match&&{start:Number(match[1]),end:Number(match[2]),total:Number(match[3])};};
+test('Google uploads in chunks and resumes from what Google kept after a server error',async()=>{let received=Buffer.alloc(0),failed=false;
+ await fixture((request,res,base)=>{if(request.url==='/start'){res.setHeader('Location',base+'/put');res.end('{}');return;}
+  if(request.headers['content-range']===`bytes */${source.length}`){res.statusCode=308;if(received.length)res.setHeader('Range',`bytes=0-${received.length-1}`);res.end();return;}
+  const part=range(request.headers['content-range']);if(part.start===300&&!failed){failed=true;received=Buffer.concat([received,request.body.subarray(0,100)]);res.statusCode=503;res.end();return;}
+  assert.equal(part.start,received.length);received=Buffer.concat([received,request.body]);if(received.length<source.length){res.statusCode=308;res.setHeader('Range',`bytes=0-${received.length-1}`);res.end();return;}res.end('{"id":"done"}');},
+ async(filename,base,requests)=>{const result=await uploadFile('google',filename,{...fast,endpoint:base+'/start'});assert.equal(result.id,'done');assert.deepEqual(received,source);assert.ok(failed);assert.ok(requests.some(r=>r.headers['content-range']===`bytes */${source.length}`));});});
+test('Dropbox follows the offset it reports when a repeated chunk is refused',async()=>{let received=Buffer.alloc(0),dropped=false;
+ await fixture((request,res)=>{if(request.url.endsWith('/start')){res.end('{"session_id":"s"}');return;}const arg=JSON.parse(request.headers['dropbox-api-arg']),offset=arg.cursor.offset;
+  if(offset!==received.length){res.statusCode=409;res.end(JSON.stringify(request.url.endsWith('/finish')?{error:{'.tag':'lookup_failed',lookup_failed:{'.tag':'incorrect_offset',correct_offset:received.length}}}:{error:{'.tag':'incorrect_offset',correct_offset:received.length}}));return;}
+  received=Buffer.concat([received,request.body]);if(offset===300&&!dropped){dropped=true;res.statusCode=500;res.end();return;}if(request.url.endsWith('/finish')){assert.equal(arg.commit.path,'/a.flac');res.end('{"id":"done"}');return;}res.end('null');},
+ async(filename,base)=>{const result=await uploadFile('dropbox',filename,{...fast,endpoint:base});assert.equal(result.id,'done');assert.deepEqual(received,source);assert.ok(dropped);});});
+test('OneDrive writes to the app folder and asks the session where to continue',async()=>{let received=Buffer.alloc(0),failed=false;
+ await fixture((request,res,base)=>{if(request.url.includes('createUploadSession')){assert.match(request.url,/^\/special\/approot:\/a\.flac:\/createUploadSession$/);res.end(JSON.stringify({uploadUrl:base+'/put'}));return;}
+  if(request.method==='GET'){res.end(JSON.stringify({nextExpectedRanges:[`${received.length}-`]}));return;}
+  assert.equal(request.headers.authorization,undefined);const part=range(request.headers['content-range']);if(part.start!==received.length){res.statusCode=416;res.end('{}');return;}
+  received=Buffer.concat([received,request.body]);if(part.start===300&&!failed){failed=true;res.statusCode=502;res.end();return;}if(received.length===source.length){res.statusCode=201;res.end('{"id":"done"}');return;}res.statusCode=202;res.end('{}');},
+ async(filename,base)=>{const result=await uploadFile('onedrive',filename,{...fast,endpoint:base});assert.equal(result.id,'done');assert.deepEqual(received,source);assert.ok(failed);});});
+test('rate limits honour Retry-After and opening a session is repeated',async()=>{let starts=0;
+ await fixture((request,res)=>{if(request.url.endsWith('/start')){if(++starts===1){res.statusCode=429;res.setHeader('Retry-After','0');res.end();return;}res.end('{"session_id":"s"}');return;}if(request.url.endsWith('/finish')){res.end('{"id":"done"}');return;}res.end('null');},
+ async(filename,base)=>{assert.equal((await uploadFile('dropbox',filename,{...fast,endpoint:base})).id,'done');assert.equal(starts,2);});});
+test('authorization failures stop at once and never expose the response body',async()=>{
+ await fixture((request,res)=>{res.statusCode=401;res.end('{"secret":"MUST_NOT_APPEAR"}');},
+ async(filename,base,requests)=>{await assert.rejects(uploadFile('google',filename,{...fast,endpoint:base+'/start'}),error=>error.message.includes('401')&&!error.message.includes('MUST_NOT_APPEAR'));assert.equal(requests.length,1);});});
+test('persistent server errors give up after the retry budget',async()=>{
+ await fixture((request,res,base)=>{if(request.url==='/start'){res.setHeader('Location',base+'/put');res.end('{}');return;}res.statusCode=500;res.end();},
+ async(filename,base,requests)=>{await assert.rejects(uploadFile('google',filename,{...fast,endpoint:base+'/start'}),/Cloud upload failed \(500\)/);assert.ok(requests.length<20,`gave up after ${requests.length} requests`);});});
+test('a provider that never advances cannot loop forever',async()=>{
+ await fixture((request,res,base)=>{if(request.url==='/start'){res.setHeader('Location',base+'/put');res.end('{}');return;}res.statusCode=308;res.end();},
+ async(filename,base,requests)=>{await assert.rejects(uploadFile('google',filename,{...fast,endpoint:base+'/start'}),/stopped making progress/);assert.ok(requests.length<20);});});
+test('cancelling stops an upload during its retry wait',async()=>{const controller=new AbortController();
+ await fixture((request,res,base)=>{if(request.url==='/start'){res.setHeader('Location',base+'/put');res.end('{}');return;}res.statusCode=503;res.setHeader('Retry-After','30');res.end();setImmediate(()=>controller.abort(new Error('cancelled')));},
+ async(filename,base)=>{const began=Date.now();await assert.rejects(uploadFile('google',filename,{...fast,endpoint:base+'/start',signal:controller.signal}),/cancelled/);assert.ok(Date.now()-began<10000);});});
+test('Drive folder is reused when it exists and created when it does not',async()=>{let exists=false;
+ await fixture((request,res)=>{if(request.method==='GET'){const query=new URL(request.url,'http://x').searchParams.get('q');assert.match(query,/name='The O\\'Brien'/);res.end(JSON.stringify({files:exists?[{id:'old'}]:[]}));return;}assert.equal(JSON.parse(request.body).mimeType,'application/vnd.google-apps.folder');res.end('{"id":"new"}');},
+ async(filename,base,requests)=>{assert.equal(await googleFolderID("The O'Brien",{token:'t',endpoint:base}),'new');exists=true;assert.equal(await googleFolderID("The O'Brien",{token:'t',endpoint:base}),'old');assert.equal(requests.filter(r=>r.method==='POST').length,1);});});

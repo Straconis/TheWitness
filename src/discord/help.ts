@@ -58,7 +58,7 @@ const pages:Record<string,string>={
   "**Normalize speaker audio:** Optional and off by default. Balances each speaker using constant gain, preserving dynamics and limiting boosts/peaks. **Match intro volume to selected speakers** independently adjusts the intro to the selected speakers’ audible level; it applies only when an intro is enabled. Quiet pauses do not drive the volume target. Neither option changes the original recording.",
   "Use the download page for speaker selection, intros, trimming and normalization.",
   "**`/exportjob action:status job:<job-id>`** — Check progress. Use `action:cancel` to cancel or `action:retry` for a failed/cancelled job. Copy the job ID from the queued-export response. Cancellation preserves the original recording; cloud files already uploaded remain.",
-  TRANSCRIBE_OPTION_HELP+"`upload:dropbox|google|onedrive|box` needs a connected owner cloud account. Both require the web export service. Exports share a processing queue across servers."
+  TRANSCRIBE_OPTION_HELP+"`upload:google|dropbox` sends one ZIP to the account connected to this server with `/cloud`. Both require the web export service. Exports share a processing queue across servers."
  ].join("\n\n"),
  downloads:[
   "**`/downloadnames style:date`** or **`style:date-channel`** — ZIP names such as `2026-10-01 - My Server - General Voice.zip` (date, server, channel).",
@@ -72,6 +72,7 @@ const pages:Record<string,string>={
   "Private links expire (check the expiry shown on the page). Anyone holding a link can use it while valid; share it only with your group."
  ].join("\n\n"),
  automation:[
+  "**`/cloud action:status|connect|auto-on|auto-off|disconnect [provider]`** — Connect this server's own Google Drive or Dropbox (changes need Manage Server). With automatic upload on, each recording of a minute or longer is sent as a ZIP when it ends, and the bot says in the channel if it skips one or the upload fails. Uploaded files stay in that account after the bot deletes its copy, so tell people in your calls.",
   "**`/startsound mode:status`** — Shows the current recording notice mode. Only the bot owner can select shared start/stop defaults on `/admin`; existing files are retained and per-server custom uploads are temporarily disabled. Reconnects and stopping never replay the start sound.",
   "Automatic recording starts **off** for a new server. These settings belong to each server separately.",
   "**`/autojoin mode:enable|disable|status`** — Join when an eligible member enters voice. Enabling only joins; it does not start recording. Disabling also turns autorecord off.",

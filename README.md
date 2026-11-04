@@ -314,7 +314,7 @@ a new job and preserves original recordings. Cancellation interrupts audio
 tools, transcription, ZIP creation and upload requests. Files already uploaded
 to a cloud account are not removed. Shutdown interrupts active jobs and queues
 them for restart; cancelled jobs stay cancelled. Optional tools have a bounded
-execution timeout and run at lowered CPU priority, and each cloud request has a two-minute timeout. If storage fails while the queue is working (for example a full disk) it pauses for 30 seconds and retries instead of staying stopped. On a hosted, multi-server bot set `CLOUD_UPLOAD_GUILD_IDS` to the server IDs allowed to upload to the owner's connected cloud accounts; when empty, every server may.
+execution timeout and run at lowered CPU priority, and each cloud request has a two-minute timeout. If storage fails while the queue is working (for example a full disk) it pauses for 30 seconds and retries instead of staying stopped. Each server connects its own Google Drive or Dropbox with `/cloud`, so servers never share an account. `CLOUD_UPLOAD_GUILD_IDS` can limit which servers may do so; when empty, every server may.
 
 Exports from every server share one queue, as Craig's cooking queue does. `EXPORT_CONCURRENCY` (default 1, up to 16) sets how many run at once; later jobs wait oldest first, including after a restart or retry, and `/export`, `/exportjob action:status` and the job page show each waiting job's position. Without the download service, `/export` waits its turn and then attaches the ZIP; Discord stops accepting edits to that reply after 15 minutes, so a long wait leaves the export on the host instead.
 
@@ -427,7 +427,6 @@ The VPS captures application output and errors in the persistent systemd journal
 
 The optional password-protected operator portal runs at `https://logs.thewitness.dev`. Its viewer is a separate read-only service on localhost port 3011, behind HTTPS. Set it up once with `sudo witness-admin log-setup`; the script prompts privately for credentials and stores a scrypt password hash in `/etc/the-witness-log-portal.env` (0600), outside Git and deployment releases. Blank credentials disable startup. It supports live refresh, time windows, text/session/job filters, and downloads of up to the latest 1,000 service records. It displays only `the-witness.service` records, escapes message text, disables caching, and redacts recognized credentials/private links. Redaction is best effort; the logs remain operator-only. See [Operator logs](docs/TROUBLESHOOTING-LOGS.md) for setup and access.
 
-Owner maintenance: stop the bot before running the cloud-account CLI to disconnect an account or otherwise modify saved credentials. The running bot serializes its export-worker and web-callback credential updates within one process; a separate CLI process does not share those locks.
 
 Disconnect removes saved account credentials, but environment tokens remain configured. If `*_REFRESH_TOKEN` remains in `.env`, a later upload can refresh it and recreate saved credentials; `*_ACCESS_TOKEN` can also keep uploads enabled. To disable the connection completely, stop the bot, disconnect the saved account, remove both environment token settings for that provider, and restart the bot. Revoke provider access if needed.
 

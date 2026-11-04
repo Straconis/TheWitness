@@ -19,6 +19,8 @@ export class RecordingManager {
  setServerAccess(access:ServerAccessStore):void{this.serverAccess=access;}
  assertServerAllowed(id:string):void{this.serverAccess?.assertAllowed(id);}
  onStopped?: (session:RecordingSession)=>Promise<void>;
+ /** Runs after every stop once the audio is saved, including ones that end sound playback skips. */
+ onFinished?: (session:RecordingSession,error?:Error)=>Promise<void>;
  onDurationWarning?: (session:RecordingSession,minutes:number) => Promise<void>;
  onDurationLimit?: (session:RecordingSession) => Promise<void>;
  selfUserID?:string;
@@ -114,6 +116,7 @@ export class RecordingManager {
   for(const packet of buffer?.flush()??[]){try{await session.append(packet.data,packet.userID,packet.username,packet.timestamp,packet.arrival);}catch(error){finalError??=error as Error;}}
   try{await session.close(finalError);}finally{this.sessions.delete(guildID);}
   if(!finalError&&!this.shuttingDown&&session.stopReason!=="disconnected"&&session.stopReason!=="low-disk")try{await this.onStopped?.(session);}catch(error){console.warn("[End sound] Playback skipped:",error);}
+  try{await this.onFinished?.(session,finalError);}catch(error){console.warn("[Cloud] Automatic upload did not start:",error);}
   return session;
  }
  /** Finalize independent servers together; a slow reconnect must not delay every stop. */

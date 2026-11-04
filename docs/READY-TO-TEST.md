@@ -46,51 +46,27 @@ node scripts/check-transcription.cjs /path/to/speech.wav
 
 ## Cloud account setup
 
-Uploads are optional and use the owner's connected account, shared by this
-private bot deployment. Connecting an account does not enable automatic uploads.
-Register a web/server OAuth application with the chosen provider, then configure
-its `<PROVIDER>_CLIENT_ID` and `<PROVIDER>_CLIENT_SECRET` privately in `.env`.
+Each Discord server connects its own Google Drive or Dropbox account, so servers
+never share recordings. Register a web OAuth application with each provider and set
+`<PROVIDER>_CLIENT_ID`, `<PROVIDER>_CLIENT_SECRET` and `CLOUD_TOKEN_KEY` in `.env`.
 Register this exact callback address at the provider:
 
 ```text
 https://YOUR-PUBLIC-WITNESS-ADDRESS/oauth/callback
 ```
 
-Start The Witness with its public web service enabled, then run:
+In Discord, someone with Manage Server runs `/cloud action:connect provider:google`
+and opens the private link. `/cloud action:auto-on` then uploads each recording of a
+minute or longer as one ZIP when it ends, and the bot says so in the channel if it
+skips one. `/cloud action:disconnect` deletes the saved tokens and asks the provider
+to revoke access; uploaded files stay in that account.
 
-```sh
-node scripts/cloud-account.cjs connect dropbox
-node scripts/cloud-account.cjs status
-```
+Tokens are encrypted under `RECORDING_PATH/private-accounts/servers`. Client secrets,
+`CLOUD_TOKEN_KEY` and saved account files must stay outside Git and public downloads.
 
-Replace `dropbox` with `google`, `onedrive` or `box`. Open the printed private
-connection URL in a browser within ten minutes and authorize the account.
-Credentials are stored under `RECORDING_PATH/private-accounts` with private file
-permissions. Refresh tokens rotate automatically when providers issue replacements.
-Client secrets and saved account files must stay outside Git, public downloads
-and shared archives. Keep the recording directory persistent across host restarts.
-
-Provider setup details:
-
-- Dropbox: enable `files.content.write`; the flow requests offline access.
-- Google: enable Drive API and configure OAuth consent/test users; the flow uses
-  `drive.file`, offline access and explicit consent. Leave the folder setting blank
-  initially. An existing folder may require additional provider authorization.
-- Microsoft: register a confidential web application with the intended account
-  types; the flow requests delegated `Files.ReadWrite` and `offline_access`.
-- Box: enable file upload permissions in its developer application.
-
-An owner can instead supply access/refresh tokens through the optional environment
-settings. A standalone access token cannot refresh itself. Disconnect saved
-credentials with `node scripts/cloud-account.cjs disconnect <provider>`, also
-removing environment tokens; revoke app access at the provider if needed.
-Google/provider policies can require reauthorization, especially development/test
-apps. The bot reports authorization failure rather than silently bypassing it.
-
-Project exports upload their ZIP, containing the project, audio and transcripts.
-Other formats upload their files. Cancellation stops outstanding requests but
-cannot undo files already accepted remotely. Restart/retry around a network
-failure can leave duplicate uploads; check the destination before retrying.
+- Google: enable the Drive API, use the `drive.file` scope, and add test users while
+  the app is in Testing, where its refresh tokens expire after 7 days.
+- Dropbox: create a Scoped access, App folder app with `files.content.write`.
 
 ## Editor and project exports
 
@@ -149,7 +125,7 @@ check; use it only when that is intended. Low-space warnings never enable cleanu
    buttons, role restrictions, reconnects and selected events/schedules.
 2. Open Audition and Audacity projects on the user's other machine and verify
    linked tracks, lengths, names and markers.
-3. Connect any desired cloud accounts and test actual uploads and reauthorization.
+3. Connect a cloud account with `/cloud` on a test server and test uploads, skipped recordings and reconnecting.
 4. Test real microphones in browsers through public HTTPS.
 5. On the chosen host, select Node 24, run `node scripts/check-host.cjs`, confirm
    native-module compatibility, persistent storage, CPU/RAM and a reachable HTTPS
