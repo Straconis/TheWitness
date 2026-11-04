@@ -15,6 +15,7 @@ import {backupChoiceHTML,backupChoiceScript} from "./backup-choice";
 import {backupMode,backupLabel,validateBackupMode,validateSavedBackups} from "../exports/soundcraft-backup";
 import { exportProgressPage } from "./export-progress-page";
 import { invitePage } from "./invite-page";
+import { landingAssetFiles, landingPage } from "./landing-page";
 import { legalPage } from "./legal-page";
 import {getServerIntro,uploadIntroChunk} from "../exports/server-intro";
 import { recordingPage } from "./recording-page";
@@ -52,6 +53,7 @@ import { startKeepAlive } from "./keepalive";
 /** One recording rarely needs more than a few remote guests; a leaked link must not flood storage. */
 export const MAX_BROWSER_GUESTS = 8;
 
+const landingAssets=path.resolve(__dirname,"../../assets/landing");
 const exportPattern = /^export-([0-9a-f-]{36})$/i;
 const filePattern = /^(manifest\.json|notes\.json|session\.(sesx|aup3?|scraft)|project\.zip|transcript\.(txt|srt|vtt)|mix(?:-no-intro)?\.(ogg|wav|flac|mp3|m4a)|(?:raw-)?track-\d+\.(ogg|wav|flac|mp3|m4a))$/;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
@@ -274,6 +276,27 @@ export class DownloadService {
       const slate=this.manager?.syncSessions.get(guildID);
       const cues=(slate?.cues??[]).filter(cue=>cue.targetUTC>Date.now()-600000);
       return this.json(response,200,{version:1,serverUTC:Date.now(),cues});
+    }
+    if (url.pathname === "/") {
+      if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
+      if (request.method === "HEAD") return this.html(response,"");
+      const present=(file:string)=>stat(path.join(landingAssets,file)).then(info=>info.isFile()&&info.size>0,()=>false);
+      return this.html(response,landingPage({demo:await present("demo.mp4"),sample:await present("sample-export.zip")},this.publicURL));
+    }
+    if (Object.hasOwn(landingAssetFiles,url.pathname)) {
+      if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
+      const asset=landingAssetFiles[url.pathname]!,filename=path.join(landingAssets,asset.file),info=await stat(filename);
+      if (!info.isFile()||!info.size) return this.error(response,404,"Not found.");
+      let start=0,end=info.size-1,status=200;
+      if (request.headers.range) {
+        const match=/^bytes=(\d+)-(\d*)$/.exec(request.headers.range);
+        if (!match||Number(match[1])>=info.size||(match[2]&&Number(match[2])<Number(match[1]))) {response.setHeader("Content-Range",`bytes */${info.size}`);return this.error(response,416,"Invalid range.");}
+        start=Number(match[1]);end=match[2]?Math.min(Number(match[2]),end):end;status=206;response.setHeader("Content-Range",`bytes ${start}-${end}/${info.size}`);
+      }
+      if (asset.download) response.setHeader("Content-Disposition",contentDisposition("attachment",asset.download));
+      response.writeHead(status,{"Content-Type":asset.type,"Accept-Ranges":"bytes","Content-Length":String(end-start+1),"Cache-Control":"public, max-age=3600"});
+      if (request.method === "HEAD") {response.end();return;}
+      await pipeline(createReadStream(filename,{start,end}),response);return;
     }
     if (["/invite", "/invite/"].includes(url.pathname)) {
       if (request.method !== "GET" && request.method !== "HEAD") return this.error(response,405,"Method not allowed.");
