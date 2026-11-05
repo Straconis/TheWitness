@@ -1,7 +1,7 @@
 import {readFile,readdir,stat,rm,lstat} from "node:fs/promises";
 import path from "node:path";
 import type {ExportJob} from "./jobs";
-import {resolveAudioFormat} from "./formats";
+import {resolveAudioFormat,usesWorkingAudio} from "./formats";
 import {getServerIntro,introRecordingID,introInUse,withRecordingIntros,SERVER_INTROS_LOCK} from "./server-intro";
 import {sessionIDPattern} from "../storage/sessions";
 import {startSoundDirectory,noticeLibraryGuild} from "./start-sound";
@@ -27,9 +27,16 @@ export async function estimateExportBytes(root:string,job:ExportJob):Promise<num
  const native=job.format==="audacity"||job.format==="soundcraft"&&job.backupProjects?.includes("audacity");
  const nativeBytes=native?spans.reduce((n:number,s:number)=>n+s*(format==="wav"?192000:384000)*1.04,0):0;
  const corrected=job.sourceExport?0:metadata.tracks.length*duration*40000;
- const scratch=maximum*rate;
+ // Keep enough space for the original timeline before edits shorten the working tracks.
+ const sourceSpan=Math.max(duration,...(job.edits?.tracks.flatMap(track=>track.clips.map(clip=>clip.end))??[]));
+ const beforeEdits=job.edits?metadata.tracks.length*sourceSpan:0;
+ const workingAudio=usesWorkingAudio(format,job,metadata.sourceType==="audio-import");
+ const working=rate<140000&&workingAudio?Math.max(beforeEdits,spans.reduce((sum:number,seconds:number)=>sum+seconds,0))*140000+(job.mix?maximum*140000:0)+(job.mix&&intro&&job.mixWithoutIntro?maximum*140000:0):0;
+ const editSources=job.edits?beforeEdits*(workingAudio?140000:rate):0;
+ const bleedSources=job.sourceExport&&job.reduceBleed?beforeEdits*140000:0;
+ const scratch=Math.max(maximum,job.edits?sourceSpan:0)*(workingAudio?140000:rate);
  // Corrected sources are removed before ZIP packaging; do not sum disjoint peaks.
- const peak=Math.max(output+corrected+scratch,output*(project?2:1)+nativeBytes*2+(job.transcribe?maximum*64000:0));
+ const peak=Math.max(output+corrected+Math.max(working,editSources)+bleedSources+scratch,output*(project?2:1)+nativeBytes*2+(job.transcribe?maximum*64000:0));
  const bytes=Math.ceil(peak*1.15+1048576);
  if(!Number.isSafeInteger(bytes)||bytes<=0)throw Error("Cannot safely estimate export disk use.");
  return bytes;

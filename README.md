@@ -483,6 +483,10 @@ The preparation page shows both a current-pass estimate and an approximate range
 
 **Clean up speech** is off by default on the recording download page and in the editor. Its gentle preset removes low rumble, reduces steady noise by up to 6 dB, adds a small voice-presence adjustment, and limits peaks. Cleanup preserves timing, including compensation for the noise filter's latency. Intro music, the dedicated sync-cue track, source recordings, and included raw originals are unchanged. Cleanup runs before original-export loudness matching and is included in the overall work estimate. An editor source that already has cleanup is not cleaned a second time. The option adds processing time and cannot restore missing or clipped words.
 
+**Reduce microphone bleed** is off by default on the recording download page and in the editor. It is for speakers in the same room: it compares the speaker tracks and turns a track down by 15 dB where another speaker is clearly louder and the track follows that speaker's envelope. Bleed under overlapping speech remains. Only levels change, so timing and length are preserved; it runs before edits and cleanup, sync cues and intro music are excluded, and raw originals stay untouched. The manifest reports the reduced seconds per track.
+
+Processed MP3, AAC, Ogg and WAV exports use lossless 24-bit FLAC working files and encode each output once at the end. FLAC exports need no separate final encode, and untouched Opus tracks remain the original stream.
+
 The release workflow builds its portable audio tool from the checksum-pinned upstream sources, tests that exact tool, and includes it in the versioned release. Existing whisper/model files and explicit custom audio-tool overrides remain in place. A custom tool must provide highpass, equalizer, afftdn and latency-compensated alimiter support for the cleanup checkbox to be available.
 
 ### Owner administration

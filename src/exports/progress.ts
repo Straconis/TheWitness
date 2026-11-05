@@ -57,16 +57,17 @@ export class OverallExportProgress {
  }
 }
 
-export interface ExportPlanOptions {parallelTracks?:boolean;nativeAudacity?:boolean;includeRaw?:boolean;mixWithoutIntro?:boolean; mix?:boolean;trimSilence?:boolean;trimEndSilence?:boolean;normalizeAudio?:boolean;cleanupAudio?:boolean;normalizeIntro?:boolean;trimStart?:number;trimEnd?:number;edits?:{tracks:Array<{track:number;clips:Array<{at:number;start:number;end:number}>}>}}
+export interface ExportPlanOptions {workingAudio?:boolean;reduceBleed?:boolean;parallelTracks?:boolean;nativeAudacity?:boolean;includeRaw?:boolean;mixWithoutIntro?:boolean; mix?:boolean;trimSilence?:boolean;trimEndSilence?:boolean;normalizeAudio?:boolean;cleanupAudio?:boolean;normalizeIntro?:boolean;trimStart?:number;trimEnd?:number;edits?:{tracks:Array<{track:number;clips:Array<{at:number;start:number;end:number}>}>}}
 /** Plan the real operation order, including repeated loudness passes and optional mix/intro work. */
 export function buildExportPlan(tracks:Array<{track:number;id?:string}>,source:number,clip:number,intro:number,format:string,options:ExportPlanOptions):ExportWork[]{
  const plan:ExportWork[]=[];const add=(id:string,kind:ExportWorkKind,seconds:number,passes=1)=>plan.push({id,kind,seconds,passes});
  for(const track of tracks){
   add(`sync:${track.track}`,"sync",source);
   if(options.includeRaw)add(`raw:${track.track}`,"encode",source);
-  add(`encode:${track.track}`,"encode",format==="ogg"&&!options.trimStart&&options.trimEnd===undefined||format==="flac"&&options.includeRaw&&!options.trimStart&&options.trimEnd===undefined?0:clip);
-  const edit=options.edits?.tracks.find(edit=>edit.track===track.track);if(edit)add(`edit:${track.track}`,"encode",Math.max(...edit.clips.map(c=>c.at+c.end-c.start)));
+  add(`encode:${track.track}`,"encode",!options.workingAudio&&format==="ogg"&&!options.trimStart&&options.trimEnd===undefined||format==="flac"&&options.includeRaw&&!options.trimStart&&options.trimEnd===undefined?0:clip);
  }
+ if(options.reduceBleed){const speakers=tracks.filter(t=>t.id!=="witness-sync");for(const t of speakers)add(`bleed-scan:${t.track}`,"analyze",clip);for(const t of speakers)add(`bleed:${t.track}`,"encode",clip);}
+ for(const track of tracks){const edit=options.edits?.tracks.find(edit=>edit.track===track.track);if(edit)add(`edit:${track.track}`,"encode",Math.max(...edit.clips.map(c=>c.at+c.end-c.start)));}
  if(options.cleanupAudio&&options.parallelTracks)add("cleanup-batch","cleanup",tracks.filter(t=>t.id!=="witness-sync").reduce((n,t)=>{const edit=options.edits?.tracks.find(e=>e.track===t.track);return n+(edit?Math.max(...edit.clips.map(c=>c.at+c.end-c.start)):clip);},0));
  else if(options.cleanupAudio)for(const t of tracks)if(t.id!=="witness-sync"){const edit=options.edits?.tracks.find(edit=>edit.track===t.track);add(`clean:${t.track}`,"cleanup",edit?Math.max(...edit.clips.map(c=>c.at+c.end-c.start)):clip);}
  const duration=options.edits?Math.max(...options.edits.tracks.map(t=>Math.max(...t.clips.map(c=>c.at+c.end-c.start)))):clip;
@@ -74,6 +75,7 @@ export function buildExportPlan(tracks:Array<{track:number;id?:string}>,source:n
  if(options.normalizeAudio||intro&&options.normalizeIntro){for(const t of tracks)add(`level:${t.track}`,options.normalizeAudio?"normalize":"measure",duration,options.normalizeAudio?3:1);if(intro&&options.normalizeIntro)add("intro-level","measure",intro);}
  if(intro){for(const t of tracks)add(`pad:${t.track}`,"encode",duration+intro);add("intro","encode",intro);}
  if(options.mix){add("mix","mix",duration+intro);if(intro&&options.mixWithoutIntro){add("mix-no-intro","encode",duration);if(options.normalizeAudio)add("mix-no-intro-normalize","normalize",duration,3);}if(intro){if(options.normalizeIntro){add("mix-level","measure",duration+intro);add("mix-intro-level","measure",intro);}add("mix-combine","mix",duration+intro);}if(options.normalizeAudio)add("mix-normalize","normalize",duration+intro,3);}
+ if(options.workingAudio){const remeasured=options.normalizeAudio&&format!=="wav"?2:1;for(const t of tracks)add(`final:${t.track}`,"encode",duration+intro,remeasured);if(intro)add("final:intro","encode",intro);if(options.mix){add("final:mix","encode",duration+intro,remeasured);if(intro&&options.mixWithoutIntro)add("final:mix-no-intro","encode",duration,remeasured);}}
  if(options.nativeAudacity)add("aup3","project",tracks.length*(duration+intro)+intro);
  add("package","package",tracks.length*duration+(options.includeRaw?tracks.length*source:0)+(options.mix?duration+intro:0)+(options.mix&&intro&&options.mixWithoutIntro?duration:0)+intro);
  return plan;
